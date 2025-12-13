@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>3D Track Editor - Road + Zoom</title>
+<title>3D Track Editor - Road + Zoom + Test</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
@@ -131,6 +131,8 @@ const modeSetSpawn = document.getElementById('modeSetSpawn');
 const zoomInBtn = document.getElementById('zoomIn');
 const zoomOutBtn = document.getElementById('zoomOut');
 const showRoadCheckbox = document.getElementById('showRoad');
+const speedHud = document.getElementById('speedHud');
+const modeBadge = document.getElementById('modeBadge');
 
 btnClear.onclick = () => { clearTrack(); renderEditor(); };
 btnSave.onclick = () => { saveToLocal(); };
@@ -486,98 +488,228 @@ let spawnT = 0.02;
 let spawnPoint = null;
 function setPlaceMode(m) {
   placeMode = m;
-  const badge = document.getElementById('modeBadge');
-  if (m === 'manualWall') badge.textContent = 'Place Manual Walls';
-  else if (m === 'billboard') badge.textContent = 'Place Billboards';
-  else if (m === 'roadWall') badge.textContent = 'Place Road Walls';
-  else if (m === 'setSpawn') badge.textContent = 'Set Spawn';
-  else badge.textContent = (mode==='edit' ? 'Editor' : 'Test');
+  if (m === 'manualWall') modeBadge.textContent = 'Place Manual Walls';
+  else if (m === 'billboard') modeBadge.textContent = 'Place Billboards';
+  else if (m === 'roadWall') modeBadge.textContent = 'Place Road Walls';
+  else if (m === 'setSpawn') modeBadge.textContent = 'Set Spawn';
+  else modeBadge.textContent = (mode==='edit' ? 'Editor' : 'Test');
 }
 
-/* ====== Save / Load ====== */
-function saveToLocal() {
-  const data = {
-    points: points.map(p=>({x:p.x,z:p.z})),
-    roadWidth: parseFloat(roadWidthInput.value),
-    wallHeight: parseFloat(wallHeightInput.value),
-    wallsEnabled: wallsToggle.checked,
-    wallGap: parseFloat(wallGapInput.value),
-    manualEntities: manualEntities.map(e => ({
-      type: e.type,
-      pos: {x:e.mesh.position.x, y:e.mesh.position.y, z:e.mesh.position.z},
-      params: e.params
-    })),
-    spawnT
-  };
-  localStorage.setItem('trackData', JSON.stringify(data));
-  alert('Tracciato salvato');
+/* ====== Test mode: spawn, physics, pit limiter ====== */
+let player, ai, playerState, aiState, centerline = [], wallBoxes = [];
+
+function enterTestMode() {
+  if (points.length < 2) { alert('Disegna almeno 2 punti per il tracciato'); return; }
+  mode = 'test';
+  btnTest.disabled = true; btnEdit.disabled = false;
+  for (let m of pointMeshes) m.visible = false;
+  const curve = buildCurveFromPoints();
+  // sample centerline
+  centerline = [];
+  const samples = 2400;
+  for (let i=0;i<samples;i++){
+    const t = i/samples;
+    const p = curve.getPointAt(t);
+    centerline.push(new THREE.Vector3(p.x,0,p.z));
+  }
+  // build wallBoxes for simple avoidance
+  wallBoxes = [];
+  autoWallGroup.children.forEach(w => wallBoxes.push(new THREE.Box3().setFromObject(w)));
+  manualEntities.forEach(e => wallBoxes.push(new THREE.Box3().setFromObject(e.mesh)));
+  spawnVehicles(curve);
+  speedHud.style.display = 'block';
+  modeBadge.textContent = 'Test';
 }
 
-function loadFromLocal() {
-  const raw = localStorage.getItem('trackData');
-  if (!raw) { alert('Nessun tracciato salvato'); return; }
-  const data = JSON.parse(raw);
-  applyTrackData(data);
+function enterEditMode() {
+  mode = 'edit';
+  btnTest.disabled = false; btnEdit.disabled = true;
+  if (player) { scene.remove(player); player = null; }
+  if (ai) { scene.remove(ai); ai = null; }
+  for (let m of pointMeshes) m.visible = true;
+  speedHud.style.display = 'none';
+  modeBadge.textContent = 'Editor';
+  editorOrbit.pos.set(0,60,120);
+  camera.position.copy(editorOrbit.pos);
+  camera.lookAt(editorOrbit.look);
 }
 
-function downloadJSON() {
-  const data = {
-    points: points.map(p=>({x:p.x,z:p.z})),
-    roadWidth: parseFloat(roadWidthInput.value),
-    wallHeight: parseFloat(wallHeightInput.value),
-    wallsEnabled: wallsToggle.checked,
-    wallGap: parseFloat(wallGapInput.value),
-    manualEntities: manualEntities.map(e => ({
-      type: e.type,
-      pos: {x:e.mesh.position.x, y:e.mesh.position.y, z:e.mesh.position.z},
-      params: e.params
-    })),
-    spawnT
-  };
-  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'track.json'; a.click();
-  URL.revokeObjectURL(url);
+/* spawn vehicles */
+function spawnVehicles(curve) {
+  if (player) scene.remove(player);
+  if (ai) scene.remove(ai);
+
+  player = new THREE.Group();
+  const startT = spawnPoint ? findClosestUOnCurve(curve, spawnPoint) : spawnT;
+  const startP = curve.getPointAt(startT);
+  const startTan = curve.getTangentAt(startT).normalize();
+  player.position.set(startP.x, 0.5, startP.z);
+  player.rotation.y = Math.atan2(startTan.x, startTan.z);
+
+  const bodyGeom = new THREE.BoxGeometry(2.2,0.5,4);
+  const bodyMat = new THREE.MeshStandardMaterial({color:0x0055ff});
+  const body = new THREE.Mesh(bodyGeom, bodyMat);
+  body.position.y = 0.4; player.add(body);
+  scene.add(player);
+
+  ai = new THREE.Group();
+  const aiT = (startT + 0.85) % 1.0;
+  const aiP = curve.getPointAt(aiT);
+  const aiTan = curve.getTangentAt(aiT).normalize();
+  ai.position.set(aiP.x, 0.5, aiP.z);
+  ai.rotation.y = Math.atan2(aiTan.x, aiTan.z);
+  const aiBody = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), new THREE.MeshStandardMaterial({color:0xff5500}));
+  aiBody.position.y = 0.4; ai.add(aiBody);
+  scene.add(ai);
+
+  playerState = {velocity:0, heading:player.rotation.y, steerAngle:0, lapStartTime:performance.now(), lastLapAvgSpeed:null};
+  aiState = {speed:8, index: Math.floor(centerline.length*0.85), targetSpeed:10};
 }
 
-function loadFromFile(e) {
-  const f = e.target.files[0];
-  if (!f) return;
-  const reader = new FileReader();
-  reader.onload = ()=> {
-    const data = JSON.parse(reader.result);
-    applyTrackData(data);
-    renderEditor();
-  };
-  reader.readAsText(f);
-}
+/* Controls */
+const input = {forward:false,back:false,left:false,right:false,brake:false};
+window.addEventListener('keydown', (e)=>{
+  if (mode !== 'test') return;
+  if (e.code === 'KeyW' || e.code === 'ArrowUp') input.forward = true;
+  if (e.code === 'KeyS' || e.code === 'ArrowDown') input.back = true;
+  if (e.code === 'KeyA' || e.code === 'ArrowLeft') input.left = true;
+  if (e.code === 'KeyD' || e.code === 'ArrowRight') input.right = true;
+  if (e.code === 'Space') input.brake = true;
+});
+window.addEventListener('keyup', (e)=>{
+  if (mode !== 'test') return;
+  if (e.code === 'KeyW' || e.code === 'ArrowUp') input.forward = false;
+  if (e.code === 'KeyS' || e.code === 'ArrowDown') input.back = false;
+  if (e.code === 'KeyA' || e.code === 'ArrowLeft') input.left = false;
+  if (e.code === 'KeyD' || e.code === 'ArrowRight') input.right = false;
+  if (e.code === 'Space') input.brake = false;
+});
 
-function applyTrackData(data) {
-  clearTrack();
-  if (!data || !data.points) return;
-  for (let pt of data.points) addPointAt(pt.x, pt.z);
-  roadWidthInput.value = data.roadWidth || roadWidthInput.value;
-  wallHeightInput.value = data.wallHeight || wallHeightInput.value;
-  wallsToggle.checked = data.wallsEnabled !== undefined ? data.wallsEnabled : wallsToggle.checked;
-  wallGapInput.value = data.wallGap !== undefined ? data.wallGap : wallGapInput.value;
-  if (data.manualEntities && data.manualEntities.length) {
-    for (let me of data.manualEntities) {
-      const mesh = (me.type==='wall' || me.type==='roadWall') ? new THREE.Mesh(new THREE.BoxGeometry(1.0, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0x777777}))
-                                      : new THREE.Mesh(new THREE.BoxGeometry(0.6, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0xffcc66}));
-      mesh.position.set(me.pos.x, me.pos.y, me.pos.z);
-      scene.add(mesh);
-      manualEntities.push({mesh, type:me.type, params:me.params});
+/* Player physics (simple F1-like) and pit limiter on grass */
+function updatePlayerPhysics(dt) {
+  if (!playerState || !player) return;
+  const maxSteer = THREE.MathUtils.degToRad(30);
+  const wheelbase = 2.6;
+  const maxSpeedMs = 340/3.6;
+  const accel = 60;
+  const brakeDecel = 120;
+  const drag = 0.8;
+
+  let throttle = 0;
+  if (input.forward && !input.back) throttle = 1;
+  else if (input.back && !input.forward) throttle = -1;
+  else throttle = 0;
+
+  if (input.brake) {
+    if (playerState.velocity > 0) playerState.velocity -= brakeDecel * dt;
+    else playerState.velocity = Math.max(playerState.velocity - brakeDecel*dt, -maxSpeedMs*0.5);
+  } else {
+    playerState.velocity += throttle * accel * dt;
+    const dragForce = drag * playerState.velocity * Math.abs(playerState.velocity) * 0.01;
+    playerState.velocity -= dragForce * dt;
+  }
+  playerState.velocity = THREE.MathUtils.clamp(playerState.velocity, -maxSpeedMs*0.6, maxSpeedMs);
+
+  let steerInput = 0;
+  if (input.left && !input.right) steerInput = 1;
+  else if (input.right && !input.left) steerInput = -1;
+  else steerInput = 0;
+
+  const speedFactor = 1 - Math.min(1, Math.abs(playerState.velocity) / (maxSpeedMs));
+  const targetSteer = steerInput * maxSteer * (0.5 + 0.5 * speedFactor);
+  playerState.steerAngle = THREE.MathUtils.lerp(playerState.steerAngle || 0, targetSteer, dt*8);
+
+  const dHeading = (playerState.velocity / Math.max(0.0001, wheelbase)) * Math.tan(playerState.steerAngle || 0);
+  playerState.heading += dHeading * dt;
+
+  const forward = new THREE.Vector3(Math.sin(playerState.heading),0,Math.cos(playerState.heading));
+  player.position.addScaledVector(forward, playerState.velocity * dt);
+  player.rotation.y = playerState.heading;
+
+  // pit limiter on grass: if off-road (distance from centerline > roadHalf) cap to 60 km/h
+  if (centerline.length > 0) {
+    const res = findNearestOnCenterline(player.position, centerline);
+    const roadHalf = (parseFloat(roadWidthInput.value) || 7.2) / 2;
+    const lateralAbs = Math.abs(res.lateral);
+    if (lateralAbs > roadHalf) {
+      const pitLimitMs = 60/3.6;
+      if (playerState.velocity > pitLimitMs) playerState.velocity = pitLimitMs;
     }
   }
-  spawnT = data.spawnT !== undefined ? data.spawnT : spawnT;
+
+  player.position.y = 0.5;
+
+  // update HUD speed
+  const kmh = Math.round(playerState.velocity * 3.6);
+  speedHud.textContent = `Speed: ${kmh} km/h`;
 }
 
-/* ====== Simple animation loop ====== */
+/* Simple AI following centerline */
+function updateAIPhysics(dt) {
+  if (!aiState || !ai) return;
+  const lookahead = 18;
+  let idx = aiState.index;
+  const targetIdx = (idx + lookahead) % centerline.length;
+  const target = centerline[targetIdx];
+  const toTarget = new THREE.Vector3(target.x - ai.position.x, 0, target.z - ai.position.z);
+  const dist = toTarget.length();
+  if (dist < 1.2) aiState.index = (aiState.index + 1) % centerline.length;
+
+  const desiredDir = toTarget.clone().normalize();
+  const desiredYaw = Math.atan2(desiredDir.x, desiredDir.z);
+  let yawDiff = Math.atan2(Math.sin(desiredYaw - ai.rotation.y), Math.cos(desiredYaw - ai.rotation.y));
+
+  // speed control: try to match player's last lap average if available
+  const playerAvg = (playerState && playerState.lastLapAvgSpeed) ? playerState.lastLapAvgSpeed : 12;
+  const nextIdx = (targetIdx + 8) % centerline.length;
+  const nextPoint = centerline[nextIdx];
+  const futureDir = new THREE.Vector3(nextPoint.x - target.x, 0, nextPoint.z - target.z).normalize();
+  const angleBetween = Math.acos(THREE.MathUtils.clamp(desiredDir.dot(futureDir), -1, 1));
+  const curveFactor = Math.min(1, angleBetween / (Math.PI/4));
+  const targetSpeed = THREE.MathUtils.lerp(playerAvg, 6, curveFactor);
+
+  if (aiState.speed < targetSpeed) aiState.speed += 6 * dt;
+  else aiState.speed -= 8 * dt;
+  aiState.speed = THREE.MathUtils.clamp(aiState.speed, 4, Math.max(6, playerAvg*1.05));
+
+  // simple avoidance
+  let avoid = false;
+  const aiBox = new THREE.Box3().setFromObject(ai);
+  for (let wb of wallBoxes) {
+    const expanded = wb.clone().expandByScalar(1.6);
+    if (aiBox.intersectsBox(expanded)) { avoid = true; break; }
+  }
+  if (avoid) {
+    aiState.speed *= 0.6;
+    yawDiff += (Math.random()>0.5?1:-1)*0.6;
+  }
+
+  const maxYawRate = dt * 3.0;
+  yawDiff = THREE.MathUtils.clamp(yawDiff, -maxYawRate, maxYawRate);
+  ai.rotation.y += yawDiff;
+
+  const forward = new THREE.Vector3(Math.sin(ai.rotation.y),0,Math.cos(ai.rotation.y));
+  ai.position.addScaledVector(forward, aiState.speed * dt);
+  ai.position.y = 0.5;
+}
+
+/* ====== Animation loop (now updates physics in Test) ====== */
 const clock = new THREE.Clock();
 function animate(){
   const dt = Math.min(0.05, clock.getDelta());
-  renderer.render(scene, camera);
+  if (mode === 'edit') {
+    renderer.render(scene, camera);
+  } else {
+    updatePlayerPhysics(dt);
+    updateAIPhysics(dt);
+    // camera follow player
+    if (player) {
+      const desired = player.position.clone().add(new THREE.Vector3(0,6,-10).applyAxisAngle(new THREE.Vector3(0,1,0), player.rotation.y));
+      camera.position.lerp(desired, dt*3);
+      camera.lookAt(player.position.clone().add(new THREE.Vector3(0,1,0)));
+    }
+    renderer.render(scene, camera);
+  }
   requestAnimationFrame(animate);
 }
 animate();
@@ -591,7 +723,6 @@ animate();
   ];
   for (let p of sample) addPointAt(p.x,p.z);
   renderEditor();
-  // set camera to editor orbit pos
   editorOrbit.pos.set(0,60,120);
   camera.position.copy(editorOrbit.pos);
   camera.lookAt(editorOrbit.look);
