@@ -785,14 +785,60 @@ function updateAIPhysics(dt) {
 /* =========================
    Animate: editor vs test camera behavior
    ========================= */
+
 const clock = new THREE.Clock();
 function animate(){
   const dt = Math.min(0.05, clock.getDelta());
+
   if (mode === 'edit') {
     renderer.render(scene, camera);
   } else {
+    // aggiorna fisica
     updatePlayerPhysics(dt);
     updateAIPhysics(dt);
+
+    // camera follow stabile e senza inversioni
+    if (player) {
+      // garantisce up verticale
+      camera.up.set(0,1,0);
+
+      // parametri follow: altezza sopra la macchina e distanza dietro
+      const followHeight = 6;   // altezza della camera rispetto alla macchina
+      const followDist  = 10;   // distanza dietro la macchina
+
+      // vettore forward della macchina (direzione in cui guarda)
+      const forward = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y)).normalize();
+
+      // posizione desiderata: dietro la macchina lungo forward, e ad altezza fissa
+      const desired = player.position.clone()
+        .addScaledVector(forward, -Math.abs(followDist)) // sempre dietro
+        .setY(player.position.y + Math.abs(followHeight)); // altezza sopra la macchina
+
+      // interpolazione morbida per evitare scatti
+      const t = Math.min(1, dt * 3.0);
+      camera.position.lerp(desired, t);
+
+      // punto da guardare: centro macchina ad altezza leggermente inferiore alla camera
+      const lookTarget = player.position.clone();
+      lookTarget.y = player.position.y + Math.min(followHeight * 0.6, camera.position.y - 0.5);
+
+      // evita che lookTarget e camera coincidano esattamente
+      if (camera.position.distanceTo(lookTarget) < 0.001) {
+        lookTarget.z += 0.001;
+      }
+
+      camera.lookAt(lookTarget);
+
+      // assicura che non ci sia roll residuo
+      camera.rotation.z = 0;
+    }
+
+    renderer.render(scene, camera);
+  }
+
+  requestAnimationFrame(animate);
+}
+
 
     // camera follow stabile e orizzontale in Test
    // camera follow stabile e orizzontale in Test
