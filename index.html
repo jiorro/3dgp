@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>3D Track Editor - Aggiornato (accelerazione ridotta)</title>
+<title>3D Track Editor - Top Down Editor</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
@@ -64,7 +64,7 @@
 
 <div id="speedHud" class="speed">Speed: 0 km/h</div>
 <div id="modeBadge" class="modeBadge">Editor</div>
-<div class="hint">Controls: W/S accelerate/brake, A/D steer; Middle click to change editor camera; Right-drag to orbit</div>
+<div class="hint">Controls: W/S accelerate/brake, A/D steer; Right-drag orbit disabilitato in editor; rotella cambia solo zoom verticale</div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
 
@@ -79,7 +79,10 @@ renderer.shadowMap.enabled = true;
 container.appendChild(renderer.domElement);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
-camera.position.set(0, 120, 120);
+// Editor top-down initial height (meters)
+let editorHeight = 120;
+camera.position.set(0, editorHeight, 0);
+camera.up.set(0,0,-1); // ensure consistent up for top-down look
 camera.lookAt(0,0,0);
 
 const hemi = new THREE.HemisphereLight(0xffffff,0x444444,0.9); hemi.position.set(0,50,0); scene.add(hemi);
@@ -296,6 +299,18 @@ window.addEventListener('keydown', (e)=>{
   }
 });
 
+/* ====== Wheel zoom: only vertical change in editor ====== */
+renderer.domElement.addEventListener('wheel', (e)=>{
+  if (mode === 'edit') {
+    // change editorHeight only, do not change lateral position
+    editorHeight = Math.max(20, Math.min(800, editorHeight + e.deltaY * 0.08));
+    camera.position.set(0, editorHeight, 0);
+    camera.lookAt(0,0,0);
+    e.preventDefault();
+    return;
+  }
+}, {passive:false});
+
 /* ====== Render spline and road ====== */
 function renderEditor() {
   if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
@@ -331,6 +346,12 @@ function renderEditor() {
     const wallH = parseFloat(wallHeightInput.value) || 2.0;
     const gap = parseFloat(wallGapInput.value) || 1.2;
     addAutoWalls(curve, (parseFloat(roadWidthInput.value)||7.2)/2 + gap, wallH, 1.0);
+  }
+
+  // ensure camera stays top-down centered on origin in editor
+  if (mode === 'edit') {
+    camera.position.set(0, editorHeight, 0);
+    camera.lookAt(0,0,0);
   }
 }
 
@@ -459,27 +480,16 @@ function findNearestOnCenterline(pos, centerlineArr) {
 }
 
 /* ====== Zoom controls (editor) ====== */
-let editorYaw = 0, editorPitch = 0, editorDistance = 120;
-let editorOrbit = { pos: new THREE.Vector3(0,60,120), look: new THREE.Vector3(0,0,0) };
-
 function editorZoomIn() {
-  editorDistance = Math.max(20, editorDistance - 8);
-  const x = Math.sin(editorYaw) * editorDistance * Math.cos(editorPitch);
-  const y = Math.sin(editorPitch) * editorDistance;
-  const z = Math.cos(editorYaw) * editorDistance * Math.cos(editorPitch);
-  editorOrbit.pos.set(x, Math.max(6,y), z);
-  camera.position.copy(editorOrbit.pos);
-  camera.lookAt(editorOrbit.look);
+  editorHeight = Math.max(20, editorHeight - 8);
+  camera.position.set(0, editorHeight, 0);
+  camera.lookAt(0,0,0);
 }
 
 function editorZoomOut() {
-  editorDistance = Math.min(400, editorDistance + 8);
-  const x = Math.sin(editorYaw) * editorDistance * Math.cos(editorPitch);
-  const y = Math.sin(editorPitch) * editorDistance;
-  const z = Math.cos(editorYaw) * editorDistance * Math.cos(editorPitch);
-  editorOrbit.pos.set(x, Math.max(6,y), z);
-  camera.position.copy(editorOrbit.pos);
-  camera.lookAt(editorOrbit.look);
+  editorHeight = Math.min(800, editorHeight + 8);
+  camera.position.set(0, editorHeight, 0);
+  camera.lookAt(0,0,0);
 }
 
 /* ====== Place mode and spawn ====== */
@@ -496,16 +506,9 @@ function setPlaceMode(m) {
 }
 
 /* ====== Test mode: spawn, physics, pit limiter ====== */
+/* (kept same as previous working version) */
 let player, ai, playerState, aiState, centerline = [], wallBoxes = [];
-
-/* TUNING PARAMETERS (modificabili) */
-const TUNING = {
-  // accel in m/s^2 chosen to get ~0-100 km/h in 2.5-2.6s and ~0-200 km/h in ~5s
-  accel: 11.0,           // m/s^2 (≈ 0→100 km/h in ~2.52s)
-  brakeDecel: 90.0,      // m/s^2
-  drag: 1.2,             // aerodynamic drag factor (higher -> slower)
-  maxSpeedKmh: 320       // top speed in km/h (reduced for "più lento")
-};
+const TUNING = { accel:11.0, brakeDecel:90.0, drag:1.2, maxSpeedKmh:320 };
 
 function enterTestMode() {
   if (points.length < 2) { alert('Disegna almeno 2 punti per il tracciato'); return; }
@@ -513,7 +516,6 @@ function enterTestMode() {
   btnTest.disabled = true; btnEdit.disabled = false;
   for (let m of pointMeshes) m.visible = false;
   const curve = buildCurveFromPoints();
-  // sample centerline
   centerline = [];
   const samples = 2400;
   for (let i=0;i<samples;i++){
@@ -521,7 +523,6 @@ function enterTestMode() {
     const p = curve.getPointAt(t);
     centerline.push(new THREE.Vector3(p.x,0,p.z));
   }
-  // build wallBoxes for simple avoidance
   wallBoxes = [];
   autoWallGroup.children.forEach(w => wallBoxes.push(new THREE.Box3().setFromObject(w)));
   manualEntities.forEach(e => wallBoxes.push(new THREE.Box3().setFromObject(e.mesh)));
@@ -538,9 +539,9 @@ function enterEditMode() {
   for (let m of pointMeshes) m.visible = true;
   speedHud.style.display = 'none';
   modeBadge.textContent = 'Editor';
-  editorOrbit.pos.set(0,60,120);
-  camera.position.copy(editorOrbit.pos);
-  camera.lookAt(editorOrbit.look);
+  // keep top-down editor camera
+  camera.position.set(0, editorHeight, 0);
+  camera.lookAt(0,0,0);
 }
 
 /* spawn vehicles */
@@ -575,7 +576,7 @@ function spawnVehicles(curve) {
   aiState = {speed:8, index: Math.floor(centerline.length*0.85), targetSpeed:10};
 }
 
-/* Controls */
+/* Controls and physics (kept from previous tuned version) */
 const input = {forward:false,back:false,left:false,right:false,brake:false};
 window.addEventListener('keydown', (e)=>{
   if (mode !== 'test') return;
@@ -594,23 +595,18 @@ window.addEventListener('keyup', (e)=>{
   if (e.code === 'Space') input.brake = false;
 });
 
-/* Player physics (tuned) and pit limiter on grass */
 function updatePlayerPhysics(dt) {
   if (!playerState || !player) return;
-
-  // tuned parameters from TUNING
-  const accel = TUNING.accel;           // m/s^2
+  const accel = TUNING.accel;
   const brakeDecel = TUNING.brakeDecel;
   const drag = TUNING.drag;
   const maxSpeedMs = (TUNING.maxSpeedKmh || 320) / 3.6;
 
-  // throttle/back
   let throttle = 0;
   if (input.forward && !input.back) throttle = 1;
   else if (input.back && !input.forward) throttle = -1;
   else throttle = 0;
 
-  // apply throttle/brake
   if (input.brake) {
     if (playerState.velocity > 0) playerState.velocity -= brakeDecel * dt;
     else playerState.velocity = Math.max(playerState.velocity - brakeDecel*dt, -maxSpeedMs*0.5);
@@ -621,16 +617,16 @@ function updatePlayerPhysics(dt) {
   }
   playerState.velocity = THREE.MathUtils.clamp(playerState.velocity, -maxSpeedMs*0.6, maxSpeedMs);
 
-  // steering
-  const maxSteer = THREE.MathUtils.degToRad(30);
   let steerInput = 0;
   if (input.left && !input.right) steerInput = 1;
   else if (input.right && !input.left) steerInput = -1;
+  else steerInput = 0;
+
+  const maxSteer = THREE.MathUtils.degToRad(30);
   const speedFactor = 1 - Math.min(1, Math.abs(playerState.velocity) / (maxSpeedMs));
   const targetSteer = steerInput * maxSteer * (0.5 + 0.5 * speedFactor);
   playerState.steerAngle = THREE.MathUtils.lerp(playerState.steerAngle || 0, targetSteer, dt*8);
 
-  // bicycle model
   const wheelbase = 2.6;
   const dHeading = (playerState.velocity / Math.max(0.0001, wheelbase)) * Math.tan(playerState.steerAngle || 0);
   playerState.heading += dHeading * dt;
@@ -639,7 +635,7 @@ function updatePlayerPhysics(dt) {
   player.position.addScaledVector(forward, playerState.velocity * dt);
   player.rotation.y = playerState.heading;
 
-  // pit limiter on grass: cap to 60 km/h if off-road
+  // pit limiter on grass
   if (centerline.length > 0) {
     const res = findNearestOnCenterline(player.position, centerline);
     const roadHalf = (parseFloat(roadWidthInput.value) || 7.2) / 2;
@@ -651,13 +647,10 @@ function updatePlayerPhysics(dt) {
   }
 
   player.position.y = 0.5;
-
-  // update HUD speed
   const kmh = Math.round(playerState.velocity * 3.6);
   speedHud.textContent = `Speed: ${kmh} km/h`;
 }
 
-/* Simple AI following centerline (adjusted aggressiveness) */
 function updateAIPhysics(dt) {
   if (!aiState || !ai) return;
   const lookahead = 18;
@@ -672,7 +665,6 @@ function updateAIPhysics(dt) {
   const desiredYaw = Math.atan2(desiredDir.x, desiredDir.z);
   let yawDiff = Math.atan2(Math.sin(desiredYaw - ai.rotation.y), Math.cos(desiredYaw - ai.rotation.y));
 
-  // speed control: try to match player's last lap average if available
   const playerAvg = (playerState && playerState.lastLapAvgSpeed) ? playerState.lastLapAvgSpeed : 12;
   const nextIdx = (targetIdx + 8) % centerline.length;
   const nextPoint = centerline[nextIdx];
@@ -681,12 +673,10 @@ function updateAIPhysics(dt) {
   const curveFactor = Math.min(1, angleBetween / (Math.PI/4));
   const targetSpeed = THREE.MathUtils.lerp(playerAvg, 6, curveFactor);
 
-  // smoother acceleration for AI with new tuning
   if (aiState.speed < targetSpeed) aiState.speed += 3.5 * dt;
   else aiState.speed -= 4.5 * dt;
   aiState.speed = THREE.MathUtils.clamp(aiState.speed, 4, Math.max(6, playerAvg*1.05));
 
-  // simple avoidance
   let avoid = false;
   const aiBox = new THREE.Box3().setFromObject(ai);
   for (let wb of wallBoxes) {
@@ -707,7 +697,7 @@ function updateAIPhysics(dt) {
   ai.position.y = 0.5;
 }
 
-/* ====== Animation loop (now updates physics in Test) ====== */
+/* ====== Animation loop (updates physics in Test) ====== */
 const clock = new THREE.Clock();
 function animate(){
   const dt = Math.min(0.05, clock.getDelta());
@@ -716,7 +706,7 @@ function animate(){
   } else {
     updatePlayerPhysics(dt);
     updateAIPhysics(dt);
-    // camera follow player (smoother)
+    // camera follow player in Test
     if (player) {
       const offset = new THREE.Vector3(0,6,-10).applyAxisAngle(new THREE.Vector3(0,1,0), player.rotation.y);
       const desired = player.position.clone().add(offset);
@@ -738,10 +728,10 @@ animate();
   ];
   for (let p of sample) addPointAt(p.x,p.z);
   renderEditor();
-  editorOrbit.pos.set(0,60,120);
-  camera.position.copy(editorOrbit.pos);
-  camera.lookAt(editorOrbit.look);
+  camera.position.set(0, editorHeight, 0);
+  camera.lookAt(0,0,0);
 })();
 </script>
 </body>
 </html>
+
