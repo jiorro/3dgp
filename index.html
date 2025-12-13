@@ -2,21 +2,21 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>Track Editor Avanzato - Strada tra Muri, IA, Spawn, Pit Limiter</title>
+<title>Editor Tracciato Avanzato - Full</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
   #container{width:100%;height:100%;position:relative;overflow:hidden}
-  .panel{position:absolute;left:12px;top:12px;background:rgba(0,0,0,0.7);padding:10px;border-radius:8px;z-index:12;min-width:320px}
+  .panel{position:absolute;left:12px;top:12px;background:rgba(0,0,0,0.75);padding:10px;border-radius:8px;z-index:20;min-width:340px}
   .panel h3{margin:0 0 6px 0;font-size:14px}
   .panel button,input,label,select{margin:4px 2px;padding:6px;font-size:13px}
-  .hint{position:absolute;right:12px;bottom:12px;background:rgba(0,0,0,0.35);padding:8px;border-radius:6px;font-size:12px;z-index:12}
-  #fileInput{display:none}
+  .hint{position:absolute;right:12px;bottom:12px;background:rgba(0,0,0,0.35);padding:8px;border-radius:6px;font-size:12px;z-index:20}
   .small{font-size:12px;color:#ddd}
-  .speed { position:absolute; right:12px; top:12px; z-index:13; background:rgba(0,0,0,0.6); padding:8px 10px; border-radius:8px; font-weight:700; color:#ffd700; display:none; }
-  .modeBadge { position:absolute; left:12px; bottom:12px; z-index:13; background:rgba(0,0,0,0.6); padding:6px 8px; border-radius:6px; font-size:13px; }
+  .speed { position:absolute; right:12px; top:12px; z-index:21; background:rgba(0,0,0,0.6); padding:8px 10px; border-radius:8px; font-weight:700; color:#ffd700; display:none; }
+  .modeBadge { position:absolute; left:12px; bottom:12px; z-index:21; background:rgba(0,0,0,0.6); padding:6px 8px; border-radius:6px; font-size:13px; }
   .entityControls { margin-top:6px; border-top:1px solid rgba(255,255,255,0.06); padding-top:6px; }
   .row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .panel .row > * { flex: none; }
 </style>
 </head>
 <body>
@@ -47,6 +47,7 @@
   <div style="margin-top:6px" class="row">
     <button id="modePlaceWalls">Place Manual Walls</button>
     <button id="modePlaceBillboards">Place Billboards</button>
+    <button id="modePlaceRoadWalls">Place Road Walls</button>
     <button id="modeSetSpawn">Set Spawn</button>
     <button id="btnTest">Test Track</button>
     <button id="btnEdit" disabled>Edit Track</button>
@@ -71,10 +72,10 @@
 
   <div style="margin-top:8px" class="row">
     <label>Upload hood image <input type="file" id="hoodImage" accept="image/*"></label>
-    <span class="small">(verrà applicata come texture sulla carrozzeria)</span>
+    <span class="small">(applicata alla carrozzeria)</span>
   </div>
 
-  <p class="small" style="margin-top:8px">Click per aggiungere punti; trascina per spostare; seleziona punto e premi Delete per rimuovere. In modalità manual walls/billboards clicca per posizionare entità.</p>
+  <p class="small" style="margin-top:8px">Click per aggiungere punti; trascina per spostare; seleziona punto e premi Delete per rimuovere. In modalità manual walls/billboards clicca per posizionare entità. Premi V per nascondere/mostrare questo pannello.</p>
 </div>
 
 <div id="speedHud" class="speed">Speed: 0 km/h</div>
@@ -116,7 +117,7 @@ let splineMesh = null;
 let roadMesh = null;
 let centerDashes = [];
 
-const manualEntities = []; // array di {mesh, type:'wall'|'billboard', params}
+const manualEntities = []; // {mesh,type,params}
 let autoWallGroup = new THREE.Group(); scene.add(autoWallGroup);
 
 const raycaster = new THREE.Raycaster();
@@ -139,6 +140,7 @@ const wallsToggle = document.getElementById('autoWalls');
 const wallGapInput = document.getElementById('wallGap');
 const modePlaceWalls = document.getElementById('modePlaceWalls');
 const modePlaceBillboards = document.getElementById('modePlaceBillboards');
+const modePlaceRoadWallsBtn = document.getElementById('modePlaceRoadWalls');
 const modeSetSpawn = document.getElementById('modeSetSpawn');
 const entityControls = document.getElementById('entityControls');
 const selEntityLabel = document.getElementById('selEntity');
@@ -162,6 +164,7 @@ btnEdit.onclick = ()=> { enterEditMode(); };
 
 modePlaceWalls.onclick = ()=> { setPlaceMode('manualWall'); };
 modePlaceBillboards.onclick = ()=> { setPlaceMode('billboard'); };
+modePlaceRoadWallsBtn.onclick = ()=> { setPlaceMode('roadWall'); };
 modeSetSpawn.onclick = ()=> { setPlaceMode('setSpawn'); };
 
 applyEntityBtn.onclick = applyEntityChanges;
@@ -170,24 +173,23 @@ zoomInBtn.onclick = editorZoomIn;
 zoomOutBtn.onclick = editorZoomOut;
 
 /* Editor placement mode */
-let placeMode = 'none'; // 'none' | 'manualWall' | 'billboard' | 'setSpawn'
-let selectedEntity = null; // reference to manualEntities element
-let spawnT = 0.02; // spawn parameter along curve (0..1)
+let placeMode = 'none'; // 'none' | 'manualWall' | 'billboard' | 'setSpawn' | 'roadWall'
+let selectedEntity = null;
+let spawnT = 0.02;
 let spawnPoint = null;
 
 /* Road visuals */
-const roadMaterial = new THREE.MeshStandardMaterial({color:0x3a3a3a, roughness:0.95}); // grigio strada
+const roadMaterial = new THREE.MeshStandardMaterial({color:0x3a3a3a, roughness:0.95});
 const dashMaterial = new THREE.MeshStandardMaterial({color:0xffd24d, emissive:0xffd24d, emissiveIntensity:0.2});
 
-/* Car hood image texture (user upload) */
+/* Hood texture */
 let hoodTexture = null;
 
 /* Player and AI */
 let player, ai, playerState, aiState;
 let centerline = [];
-let wallBoxes = []; // for AI simple avoidance
-let lastLapTimes = []; // store lap times to compute average speed
-let lapStartTime = null;
+let wallBoxes = [];
+let lastLapTimes = [];
 let lastLapIndex = 0;
 
 /* Camera/editor controls */
@@ -240,18 +242,12 @@ renderer.domElement.addEventListener('pointerdown', (ev)=>{
   raycaster.ray.intersectPlane(plane, intersect);
 
   if (mode === 'edit') {
-    // if placing manual entities or spawn
-    if (placeMode === 'manualWall') {
-      placeManualEntity('wall', intersect);
-      return;
-    } else if (placeMode === 'billboard') {
-      placeManualEntity('billboard', intersect);
-      return;
-    } else if (placeMode === 'setSpawn') {
-      // set spawnT to nearest t on curve
-      if (!splineMesh) return;
+    // place manual entities or spawn
+    if (placeMode === 'manualWall') { placeManualEntity('wall', intersect); return; }
+    if (placeMode === 'billboard') { placeManualEntity('billboard', intersect); return; }
+    if (placeMode === 'setSpawn') {
       const curve = buildCurveFromPoints();
-      if (!curve) return;
+      if (!curve) { alert('Disegna prima il tracciato'); return; }
       const u = findClosestUOnCurve(curve, intersect);
       spawnT = u;
       spawnPoint = curve.getPointAt(u);
@@ -259,6 +255,33 @@ renderer.domElement.addEventListener('pointerdown', (ev)=>{
       setPlaceMode('none');
       return;
     }
+    if (placeMode === 'roadWall') {
+      const curve = buildCurveFromPoints();
+      if (!curve) { alert('Disegna prima il tracciato'); return; }
+      const u = findClosestUOnCurve(curve, intersect);
+      const p = curve.getPointAt(u);
+      const tan = curve.getTangentAt(u).normalize();
+      const left = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), tan).normalize();
+      const gap = parseFloat(wallGapInput.value) || 1.2;
+      const roadHalf = (parseFloat(roadWidthInput.value) || 7.2) / 2;
+      // determine side by click relative to centerline
+      const nearest = findNearestOnCenterline(p, curve.getPoints(200));
+      const side = (nearest && nearest.lateral < 0) ? -1 : 1;
+      const offset = left.clone().multiplyScalar(side * (roadHalf + gap));
+      const pos = p.clone().add(offset);
+      const wallH = parseFloat(wallHeightInput.value) || 2.0;
+      const wallLen = 6;
+      const wallThickness = 1.0;
+      const box = new THREE.Mesh(new THREE.BoxGeometry(wallThickness, wallH, wallLen), new THREE.MeshStandardMaterial({color:0x666666}));
+      box.position.copy(pos);
+      box.lookAt(pos.clone().add(tan));
+      box.position.y = wallH/2;
+      scene.add(box);
+      manualEntities.push({mesh: box, type:'roadWall', params:{height:wallH, length:wallLen, thickness:wallThickness, side}});
+      renderEditor();
+      return;
+    }
+
     // normal editor: select or add point
     let found = false;
     for (let i=0;i<pointMeshes.length;i++){
@@ -276,9 +299,6 @@ renderer.domElement.addEventListener('pointerdown', (ev)=>{
       addPointAt(intersect.x, intersect.z);
       renderEditor();
     }
-  } else {
-    // in test mode, maybe select manual entity for editing if clicked (allow editing while testing)
-    // ignore for now
   }
 });
 
@@ -315,33 +335,35 @@ window.addEventListener('keydown', (e)=>{
     if (e.key === '+' || e.key === '=') editorZoomIn();
     if (e.key === '-') editorZoomOut();
   }
+  // toggle UI with V
+  if (e.key.toLowerCase() === 'v') {
+    const panel = document.querySelector('.panel');
+    if (panel) {
+      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+      modeBadge.style.display = panel.style.display === 'none' ? 'none' : 'block';
+    }
+  }
 });
 
 /* =========================
    Render spline, road, walls
    ========================= */
 function renderEditor() {
-  // clear previous visuals
   if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
   if (roadMesh) { scene.remove(roadMesh); roadMesh = null; }
   for (let d of centerDashes) scene.remove(d); centerDashes.length = 0;
-  // auto walls: remove only autoWallGroup children (keep manualEntities)
-  while (autoWallGroup.children.length) {
-    autoWallGroup.remove(autoWallGroup.children[0]);
-  }
+  while (autoWallGroup.children.length) autoWallGroup.remove(autoWallGroup.children[0]);
 
   if (points.length < 2) return;
   const curve = buildCurveFromPoints();
   if (!curve) return;
 
-  // line
   const linePts = curve.getPoints(Math.max(64, points.length*12));
   const geom = new THREE.BufferGeometry().setFromPoints(linePts);
   const line = new THREE.Line(geom, new THREE.LineBasicMaterial({color:0xffff66}));
   splineMesh = line;
   scene.add(line);
 
-  // road mesh (grigio) in mezzo ai muri
   if (document.getElementById('showRoad').checked) {
     const width = parseFloat(roadWidthInput.value) || 7.2;
     const roadGeom = buildRoad(curve, width, 600);
@@ -350,10 +372,8 @@ function renderEditor() {
     scene.add(roadMesh);
   }
 
-  // center dashes
   addCenterDashes(curve);
 
-  // auto walls if enabled
   if (wallsToggle.checked) {
     const wallH = parseFloat(wallHeightInput.value) || 2.0;
     const gap = parseFloat(wallGapInput.value) || 1.2;
@@ -361,15 +381,7 @@ function renderEditor() {
   }
 }
 
-/* Build CatmullRom curve from points */
-function buildCurveFromPoints() {
-  if (points.length < 2) return null;
-  const pts = points.map(p=>p.clone());
-  const closed = pts[0].distanceTo(pts[pts.length-1]) < 1.0;
-  return new THREE.CatmullRomCurve3(pts, closed, 'catmullrom', 0.5);
-}
-
-/* Road mesh builder */
+/* Road builder */
 function buildRoad(curve, width, segments) {
   const geometry = new THREE.BufferGeometry();
   const positions = [];
@@ -424,10 +436,9 @@ function addCenterDashes(curve, dashLen=3, gap=2) {
 }
 
 /* =========================
-   Auto walls generation (keeps manualEntities intact)
+   Auto walls generation
    ========================= */
 function addAutoWalls(curve, offsetX, height, thickness) {
-  // create wall segments along curve and add to autoWallGroup
   const segments = 400;
   for (let i=0;i<segments;i++){
     const t = i/segments;
@@ -447,11 +458,8 @@ function addAutoWalls(curve, offsetX, height, thickness) {
 
 /* =========================
    Manual entities (walls / billboards)
-   - independent entities that do not affect auto walls
-   - selectable and editable individually
    ========================= */
 function placeManualEntity(type, worldPos) {
-  // create entity mesh and push to manualEntities
   const h = parseFloat(wallHeightInput.value) || 2.0;
   const len = 6;
   if (type === 'wall') {
@@ -485,13 +493,12 @@ function applyEntityChanges() {
   const l = parseFloat(entityLength.value) || 1.0;
   selectedEntity.params.height = h;
   selectedEntity.params.length = l;
-  // update mesh geometry (dispose old)
   const m = selectedEntity.mesh;
   scene.remove(m);
   let newGeom;
-  if (selectedEntity.type === 'wall') newGeom = new THREE.BoxGeometry(1.0, h, l);
+  if (selectedEntity.type === 'wall' || selectedEntity.type === 'roadWall') newGeom = new THREE.BoxGeometry(1.0, h, l);
   else newGeom = new THREE.BoxGeometry(0.6, h, l);
-  const mat = new THREE.MeshStandardMaterial({color: selectedEntity.type==='wall'?0x777777:0xffcc66});
+  const mat = new THREE.MeshStandardMaterial({color: selectedEntity.type==='wall'||selectedEntity.type==='roadWall'?0x777777:0xffcc66});
   const newMesh = new THREE.Mesh(newGeom, mat);
   newMesh.position.copy(m.position);
   newMesh.rotation.copy(m.rotation);
@@ -509,12 +516,6 @@ function deleteSelectedEntity() {
 }
 
 /* =========================
-   Prevent auto walls duplication on repeated clicks
-   - autoWallGroup is cleared and regenerated only when renderEditor runs
-   - manualEntities are independent
-   ========================= */
-
-/* =========================
    Spawn, Test mode, Physics
    ========================= */
 function enterTestMode() {
@@ -522,7 +523,6 @@ function enterTestMode() {
   mode = 'test';
   btnTest.disabled = true; btnEdit.disabled = false;
   for (let m of pointMeshes) m.visible = false;
-  // build centerline samples
   const curve = buildCurveFromPoints();
   centerline = [];
   const samples = 2400;
@@ -531,11 +531,9 @@ function enterTestMode() {
     const p = curve.getPointAt(t);
     centerline.push(new THREE.Vector3(p.x,0,p.z));
   }
-  // compute wallBoxes for AI avoidance (auto walls + manual walls)
   wallBoxes = [];
   autoWallGroup.children.forEach(w => wallBoxes.push(new THREE.Box3().setFromObject(w)));
   manualEntities.forEach(e => wallBoxes.push(new THREE.Box3().setFromObject(e.mesh)));
-
   spawnVehicles(curve);
   speedHud.style.display = 'block';
   modeBadge.textContent = 'Test';
@@ -553,12 +551,11 @@ function enterEditMode() {
   applyEditorCameraImmediate();
 }
 
-/* spawn vehicles on curve; spawnT chosen in editor or default */
+/* spawn vehicles */
 function spawnVehicles(curve) {
   if (player) scene.remove(player);
   if (ai) scene.remove(ai);
 
-  // player group with body (car body uses hoodTexture if provided)
   player = new THREE.Group();
   const startT = spawnPoint ? findClosestUOnCurve(curve, spawnPoint) : spawnT;
   const startP = curve.getPointAt(startT);
@@ -566,19 +563,14 @@ function spawnVehicles(curve) {
   player.position.set(startP.x, 0.5, startP.z);
   player.rotation.y = Math.atan2(startTan.x, startTan.z);
 
-  // body geometry: box with texture for hood (user image)
   const bodyGeom = new THREE.BoxGeometry(2.2,0.5,4);
   let bodyMat;
-  if (hoodTexture) {
-    bodyMat = new THREE.MeshStandardMaterial({map: hoodTexture});
-  } else {
-    bodyMat = new THREE.MeshStandardMaterial({color:0x0055ff});
-  }
+  if (hoodTexture) bodyMat = new THREE.MeshStandardMaterial({map: hoodTexture});
+  else bodyMat = new THREE.MeshStandardMaterial({color:0x0055ff});
   const body = new THREE.Mesh(bodyGeom, bodyMat);
   body.position.y = 0.4; player.add(body);
   scene.add(player);
 
-  // AI
   ai = new THREE.Group();
   const aiT = (startT + 0.85) % 1.0;
   const aiP = curve.getPointAt(aiT);
@@ -589,15 +581,11 @@ function spawnVehicles(curve) {
   aiBody.position.y = 0.4; ai.add(aiBody);
   scene.add(ai);
 
-  // states
-  playerState = {velocity:0, heading:player.rotation.y, steerAngle:0, lapIndex:0, lapStartTime:performance.now()};
+  playerState = {velocity:0, heading:player.rotation.y, steerAngle:0, lapStartTime:performance.now(), lastLapAvgSpeed:null};
   aiState = {speed:8, index: Math.floor(centerline.length*0.85), targetSpeed:10};
 
-  // reset lap tracking
-  lastLapTimes = [];
-  lapStartTime = performance.now();
   lastLapIndex = 0;
-
+  speedHud.textContent = 'Speed: 0 km/h';
   cameraMode = 'hood';
   applyCameraModeImmediate();
 }
@@ -765,34 +753,28 @@ function editorZoomOut() {
    ========================= */
 function updatePlayerPhysics(dt) {
   if (!playerState) return;
-  // F1-like parameters (tweakable)
   const maxSteer = THREE.MathUtils.degToRad(30);
   const wheelbase = 2.6;
-  const maxSpeedMs = 340/3.6; // 340 km/h top unrealistic but cap
-  const accel = 60; // strong acceleration (m/s^2)
+  const maxSpeedMs = 340/3.6;
+  const accel = 60;
   const brakeDecel = 120;
   const drag = 0.8;
-  const grip = 6.0;
 
-  // throttle/back exclusive
   let throttle = 0;
   if (input.forward && !input.back) throttle = 1;
   else if (input.back && !input.forward) throttle = -1;
   else throttle = 0;
 
-  // apply throttle/brake
   if (input.brake) {
     if (playerState.velocity > 0) playerState.velocity -= brakeDecel * dt;
     else playerState.velocity = Math.max(playerState.velocity - brakeDecel*dt, -maxSpeedMs*0.5);
   } else {
     playerState.velocity += throttle * accel * dt;
-    // aerodynamic drag
     const dragForce = drag * playerState.velocity * Math.abs(playerState.velocity) * 0.01;
     playerState.velocity -= dragForce * dt;
   }
   playerState.velocity = THREE.MathUtils.clamp(playerState.velocity, -maxSpeedMs*0.6, maxSpeedMs);
 
-  // steering: A left, D right
   let steerInput = 0;
   if (input.left && !input.right) steerInput = 1;
   else if (input.right && !input.left) steerInput = -1;
@@ -802,54 +784,44 @@ function updatePlayerPhysics(dt) {
   const targetSteer = steerInput * maxSteer * (0.5 + 0.5 * speedFactor);
   playerState.steerAngle = THREE.MathUtils.lerp(playerState.steerAngle || 0, targetSteer, dt*8);
 
-  // bicycle model
   const dHeading = (playerState.velocity / Math.max(0.0001, wheelbase)) * Math.tan(playerState.steerAngle || 0);
   playerState.heading += dHeading * dt;
 
-  // move
   const forward = new THREE.Vector3(Math.sin(playerState.heading),0,Math.cos(playerState.heading));
   player.position.addScaledVector(forward, playerState.velocity * dt);
   player.rotation.y = playerState.heading;
 
-  // pit limiter on grass: if off-road (distance from centerline > roadHalf) cap to 60 km/h
+  // pit limiter on grass
   if (centerline.length > 0) {
     const res = findNearestOnCenterline(player.position, centerline);
     const roadHalf = (parseFloat(roadWidthInput.value) || 7.2) / 2;
     const lateralAbs = Math.abs(res.lateral);
     if (lateralAbs > roadHalf) {
-      // on grass: cap speed to 60 km/h
       const pitLimitMs = 60/3.6;
       if (playerState.velocity > pitLimitMs) playerState.velocity = pitLimitMs;
     }
   }
 
-  // keep constant height to avoid micro-dossi
   player.position.y = 0.5;
 
-  // lap detection for average speed: approximate by centerline index
+  // lap detection
   if (centerline.length > 0) {
     const nearestIdx = findNearestIndexOnCenterline(player.position, centerline);
-    // detect wrap-around
     if (nearestIdx < lastLapIndex && lastLapIndex > centerline.length*0.8) {
-      // completed a lap
       const now = performance.now();
-      const lapTime = (now - playerState.lapStartTime) / 1000.0; // seconds
+      const lapTime = (now - playerState.lapStartTime) / 1000.0;
       lastLapTimes.push(lapTime);
       playerState.lapStartTime = now;
-      // compute average speed over last lap: track length / lapTime
-      // approximate track length by centerline length in meters (sum of segments)
       const trackLen = computeCenterlineLength(centerline);
-      playerState.lastLapAvgSpeed = trackLen / lapTime; // m/s
+      playerState.lastLapAvgSpeed = trackLen / lapTime;
     }
     lastLapIndex = nearestIdx;
   }
 
-  // update HUD speed
   const kmh = Math.round(playerState.velocity * 3.6);
   speedHud.textContent = `Speed: ${kmh} km/h`;
 }
 
-/* AI: pure pursuit but target speed = player's average lap speed (if available) */
 function updateAIPhysics(dt) {
   if (!aiState) return;
   const lookahead = 18;
@@ -864,22 +836,18 @@ function updateAIPhysics(dt) {
   const desiredYaw = Math.atan2(desiredDir.x, desiredDir.z);
   let yawDiff = Math.atan2(Math.sin(desiredYaw - ai.rotation.y), Math.cos(desiredYaw - ai.rotation.y));
 
-  // curvature estimate for speed control
   const nextIdx = (targetIdx + 8) % centerline.length;
   const nextPoint = centerline[nextIdx];
   const futureDir = new THREE.Vector3(nextPoint.x - target.x, 0, nextPoint.z - target.z).normalize();
   const angleBetween = Math.acos(THREE.MathUtils.clamp(desiredDir.dot(futureDir), -1, 1));
   const curveFactor = Math.min(1, angleBetween / (Math.PI/4));
-  // target speed: if player has lastLapAvgSpeed use it, else default
-  const playerAvg = (playerState && playerState.lastLapAvgSpeed) ? playerState.lastLapAvgSpeed : 12; // m/s
-  const targetSpeed = THREE.MathUtils.lerp(playerAvg, 6, curveFactor); // slow in curves
+  const playerAvg = (playerState && playerState.lastLapAvgSpeed) ? playerState.lastLapAvgSpeed : 12;
+  const targetSpeed = THREE.MathUtils.lerp(playerAvg, 6, curveFactor);
 
-  // smooth speed
   if (aiState.speed < targetSpeed) aiState.speed += 6 * dt;
   else aiState.speed -= 8 * dt;
   aiState.speed = THREE.MathUtils.clamp(aiState.speed, 4, Math.max(6, playerAvg*1.05));
 
-  // wall avoidance simple
   let avoid = false;
   const aiBox = new THREE.Box3().setFromObject(ai);
   for (let wb of wallBoxes) {
@@ -891,20 +859,16 @@ function updateAIPhysics(dt) {
     yawDiff += (Math.random()>0.5?1:-1)*0.6;
   }
 
-  // rotate gradually
   const maxYawRate = dt * 3.0;
   yawDiff = THREE.MathUtils.clamp(yawDiff, -maxYawRate, maxYawRate);
   ai.rotation.y += yawDiff;
 
-  // move forward
   const forward = new THREE.Vector3(Math.sin(ai.rotation.y),0,Math.cos(ai.rotation.y));
   ai.position.addScaledVector(forward, aiState.speed * dt);
-
-  // keep ai height constant
   ai.position.y = 0.5;
 }
 
-/* Helpers: nearest on centerline */
+/* Helpers */
 function findNearestOnCenterline(pos, centerlineArr) {
   let bestIdx = 0;
   let bestDist = Infinity;
@@ -933,14 +897,10 @@ function computeCenterlineLength(centerlineArr) {
   for (let i=1;i<centerlineArr.length;i++){
     len += centerlineArr[i].distanceTo(centerlineArr[i-1]);
   }
-  // if closed add last->first
   len += centerlineArr[0].distanceTo(centerlineArr[centerlineArr.length-1]);
   return len;
 }
-
-/* find closest u on curve to world point (approx by sampling) */
-function findClosestUOnCurve(curve, worldPos) {
-  const samples = 200;
+function findClosestUOnCurve(curve, worldPos, samples=400) {
   let bestU = 0; let bestD = Infinity;
   for (let i=0;i<=samples;i++){
     const u = i/samples;
@@ -952,19 +912,7 @@ function findClosestUOnCurve(curve, worldPos) {
 }
 
 /* =========================
-   Editor place mode helpers
-   ========================= */
-function setPlaceMode(m) {
-  placeMode = m;
-  // update UI badge
-  if (m === 'manualWall') modeBadge.textContent = 'Place Manual Walls';
-  else if (m === 'billboard') modeBadge.textContent = 'Place Billboards';
-  else if (m === 'setSpawn') modeBadge.textContent = 'Set Spawn';
-  else modeBadge.textContent = (mode==='edit' ? 'Editor' : 'Test');
-}
-
-/* =========================
-   Hood image upload -> texture
+   Hood image upload
    ========================= */
 hoodImageInput.addEventListener('change', (e)=>{
   const f = e.target.files[0];
@@ -976,11 +924,10 @@ hoodImageInput.addEventListener('change', (e)=>{
       const tex = new THREE.Texture(img);
       tex.needsUpdate = true;
       hoodTexture = tex;
-      // if player exists, apply immediately
       if (player) {
         player.traverse(c => { if (c.isMesh) c.material.map = hoodTexture; });
       }
-      alert('Immagine cofano caricata e applicata');
+      alert('Immagine cofano caricata');
     };
     img.src = reader.result;
   };
@@ -1049,7 +996,6 @@ function loadFromFile(e) {
 }
 
 function applyTrackData(data) {
-  // clear existing
   clearTrack();
   if (!data || !data.points) return;
   for (let pt of data.points) addPointAt(pt.x, pt.z);
@@ -1057,10 +1003,9 @@ function applyTrackData(data) {
   wallHeightInput.value = data.wallHeight || wallHeightInput.value;
   wallsToggle.checked = data.wallsEnabled !== undefined ? data.wallsEnabled : wallsToggle.checked;
   wallGapInput.value = data.wallGap !== undefined ? data.wallGap : wallGapInput.value;
-  // manual entities
   if (data.manualEntities && data.manualEntities.length) {
     for (let me of data.manualEntities) {
-      const mesh = (me.type==='wall') ? new THREE.Mesh(new THREE.BoxGeometry(1.0, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0x777777}))
+      const mesh = (me.type==='wall' || me.type==='roadWall') ? new THREE.Mesh(new THREE.BoxGeometry(1.0, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0x777777}))
                                       : new THREE.Mesh(new THREE.BoxGeometry(0.6, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0xffcc66}));
       mesh.position.set(me.pos.x, me.pos.y, me.pos.z);
       scene.add(mesh);
@@ -1079,22 +1024,21 @@ function clearTrack() {
   if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
   if (roadMesh) { scene.remove(roadMesh); roadMesh = null; }
   for (let d of centerDashes) scene.remove(d); centerDashes.length = 0;
-  // remove auto walls
   while (autoWallGroup.children.length) autoWallGroup.remove(autoWallGroup.children[0]);
-  // remove manual entities
   for (let e of manualEntities) scene.remove(e.mesh);
   manualEntities.length = 0;
 }
 
 /* =========================
-   Utility: set place mode and entity selection
+   Utility: set place mode
    ========================= */
-function setPlaceMode(modeStr) {
-  placeMode = modeStr;
-  if (modeStr === 'none') modeBadge.textContent = (mode==='edit' ? 'Editor' : 'Test');
-  else if (modeStr === 'manualWall') modeBadge.textContent = 'Place Manual Walls';
-  else if (modeStr === 'billboard') modeBadge.textContent = 'Place Billboards';
-  else if (modeStr === 'setSpawn') modeBadge.textContent = 'Set Spawn';
+function setPlaceMode(m) {
+  placeMode = m;
+  if (m === 'manualWall') modeBadge.textContent = 'Place Manual Walls';
+  else if (m === 'billboard') modeBadge.textContent = 'Place Billboards';
+  else if (m === 'roadWall') modeBadge.textContent = 'Place Road Walls';
+  else if (m === 'setSpawn') modeBadge.textContent = 'Set Spawn';
+  else modeBadge.textContent = (mode==='edit' ? 'Editor' : 'Test');
 }
 
 /* =========================
@@ -1117,21 +1061,7 @@ function animate(){
 animate();
 
 /* =========================
-   Small helpers used above
-   ========================= */
-function findClosestPointOnCurve(curve, worldPos, samples=400) {
-  let best = {u:0, d:Infinity};
-  for (let i=0;i<=samples;i++){
-    const u = i/samples;
-    const p = curve.getPointAt(u);
-    const d = p.distanceTo(worldPos);
-    if (d < best.d) { best.d = d; best.u = u; }
-  }
-  return best;
-}
-
-/* =========================
-   End of file
+   End of script
    ========================= */
 </script>
 </body>
