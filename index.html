@@ -1,507 +1,591 @@
 <!doctype html>
 <html lang="it">
 <head>
-  <meta charset="utf-8" />
-  <title>F1 Cittadina - Monaco Style (Updated)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    html,body { height:100%; margin:0; background:#111; font-family:Arial,Helvetica,sans-serif; }
-    #container { width:100%; height:100%; display:block; position:relative; overflow:hidden; }
-    .ui {
-      position: absolute; left:12px; top:12px; color:#fff; z-index:10;
-      background:rgba(0,0,0,0.45); padding:10px 12px; border-radius:8px;
-      box-shadow:0 4px 12px rgba(0,0,0,0.6);
-    }
-    .ui h1 { margin:0 0 6px 0; font-size:14px; font-weight:700; letter-spacing:0.5px; }
-    .ui p { margin:4px 0; font-size:13px; }
-    .ui .big { font-size:18px; font-weight:700; color:#ffd700; }
-    .hint { position:absolute; right:12px; bottom:12px; color:#ddd; background:rgba(0,0,0,0.35); padding:8px 10px; border-radius:6px; font-size:12px; }
-  </style>
+<meta charset="utf-8" />
+<title>Track Editor + Test - F1 Cittadina</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
+  #container{width:100%;height:100%;position:relative;overflow:hidden}
+  .panel{position:absolute;left:12px;top:12px;background:rgba(0,0,0,0.5);padding:10px;border-radius:8px;z-index:10}
+  .panel h3{margin:0 0 6px 0;font-size:14px}
+  .panel button,input,select{margin:4px 2px;padding:6px;font-size:13px}
+  .hint{position:absolute;right:12px;bottom:12px;background:rgba(0,0,0,0.35);padding:8px;border-radius:6px;font-size:12px}
+  #fileInput{display:none}
+</style>
 </head>
 <body>
-  <div id="container"></div>
+<div id="container"></div>
 
-  <div class="ui" id="hud">
-    <h1>F1 Cittadina - Monaco Style</h1>
-    <p><span class="big" id="speed">Speed: 0 km/h</span></p>
-    <p id="lap">Lap: 0 / 3</p>
-    <p id="status">Status: Ready</p>
+<div class="panel" id="ui">
+  <h3>Track Editor</h3>
+  <div>
+    <button id="btnClear">Clear</button>
+    <button id="btnSave">Save</button>
+    <button id="btnLoad">Load</button>
+    <button id="btnDownload">Download JSON</button>
+    <input type="file" id="fileInput" accept=".json">
   </div>
+  <div style="margin-top:6px">
+    <label>Road Width <input id="roadWidth" type="number" value="7.2" step="0.2" style="width:70px"></label>
+    <label>Wall Height <input id="wallHeight" type="number" value="2.0" step="0.1" style="width:70px"></label>
+  </div>
+  <div style="margin-top:6px">
+    <button id="btnTest">Test Track</button>
+    <button id="btnEdit" disabled>Edit Track</button>
+  </div>
+  <p style="font-size:12px;margin:6px 0 0 0">Click to add points. Drag to move. Select point and press Delete to remove.</p>
+</div>
 
-  <div class="hint">Controls: W/S or ArrowUp/ArrowDown accelerate/brake, A/D or ArrowLeft/ArrowRight steer</div>
+<div class="hint">Controls: W/S or ArrowUp/Down accelerate/brake, A/D or ArrowLeft/Right steer</div>
 
-  <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
 
-  <script>
-  // ====== Setup scena, renderer, camera ======
-  const container = document.getElementById('container');
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x87ceeb);
+<script>
+/* ====== Setup base scene ====== */
+const container = document.getElementById('container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+container.appendChild(renderer.domElement);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = true;
-  container.appendChild(renderer.domElement);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
+camera.position.set(0, 60, 120);
+camera.lookAt(0,0,0);
 
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
-  camera.position.set(0, 2.2, 3); // iniziale, verrà aggiornato dalla camera sul cofano
+const hemi = new THREE.HemisphereLight(0xffffff,0x444444,0.9); hemi.position.set(0,50,0); scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffffff,0.8); dir.position.set(-10,20,10); dir.castShadow=true; scene.add(dir);
 
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.9);
-  hemi.position.set(0, 50, 0);
-  scene.add(hemi);
+const groundMat = new THREE.MeshStandardMaterial({color:0x2b2b2b});
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000,2000), groundMat);
+ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
 
-  const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-  dir.position.set(-10, 20, 10);
-  dir.castShadow = true;
-  dir.shadow.mapSize.set(2048,2048);
-  scene.add(dir);
+const grassMat = new THREE.MeshStandardMaterial({color:0x2e8b57});
+const grass = new THREE.Mesh(new THREE.PlaneGeometry(2000,2000), grassMat);
+grass.rotation.x = -Math.PI/2; grass.position.y = 0.001; scene.add(grass);
 
-  // ====== Ground and grass ======
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b });
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), groundMat);
-  ground.rotation.x = -Math.PI/2;
-  ground.receiveShadow = true;
-  scene.add(ground);
+/* ====== Editor state ====== */
+let mode = 'edit'; // 'edit' or 'test'
+const points = []; // THREE.Vector3[]
+const pointMeshes = [];
+let selectedPointIndex = -1;
 
-  const grassMat = new THREE.MeshStandardMaterial({ color: 0x2e8b57, roughness:1 });
-  const grass = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), grassMat);
-  grass.rotation.x = -Math.PI/2;
-  grass.position.y = 0.001;
-  grass.receiveShadow = true;
-  scene.add(grass);
+const lineMaterial = new THREE.LineBasicMaterial({color:0xffff66});
+let splineMesh = null;
+let roadMesh = null;
+let wallMeshes = [];
+let centerDashes = [];
 
-  // ====== Monaco-inspired spline track (longer, tighter turns) ======
-  const roadGroup = new THREE.Group();
-  scene.add(roadGroup);
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let dragging = false;
+let dragIndex = -1;
+const plane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
 
-  const roadWidth = 7.2; // strada stretta come circuito cittadino
-  // control points inspired to a street circuit with tight chicanes and hairpins
-  const pts = [
-    new THREE.Vector3(0,0,-220),
-    new THREE.Vector3(0,0,-160),
-    new THREE.Vector3(12,0,-130),
-    new THREE.Vector3(28,0,-100),
-    new THREE.Vector3(36,0,-60),
-    new THREE.Vector3(30,0,-20),
-    new THREE.Vector3(18,0,10),
-    new THREE.Vector3(6,0,36),
-    new THREE.Vector3(-6,0,60),
-    new THREE.Vector3(-28,0,80),
-    new THREE.Vector3(-48,0,60),
-    new THREE.Vector3(-56,0,20),
-    new THREE.Vector3(-48,0,-20),
-    new THREE.Vector3(-30,0,-60),
-    new THREE.Vector3(-12,0,-100),
-    new THREE.Vector3(6,0,-140),
-    new THREE.Vector3(0,0,-220) // chiude
-  ];
-  const curve = new THREE.CatmullRomCurve3(pts, true, 'catmullrom', 0.5);
+/* UI elements */
+const btnClear = document.getElementById('btnClear');
+const btnSave = document.getElementById('btnSave');
+const btnLoad = document.getElementById('btnLoad');
+const btnDownload = document.getElementById('btnDownload');
+const fileInput = document.getElementById('fileInput');
+const btnTest = document.getElementById('btnTest');
+const btnEdit = document.getElementById('btnEdit');
+const roadWidthInput = document.getElementById('roadWidth');
+const wallHeightInput = document.getElementById('wallHeight');
 
-  // build road mesh with more segments (più lungo e fluido)
-  function buildRoad(curve, width, segments) {
-    const geometry = new THREE.BufferGeometry();
-    const positions = [];
-    const normals = [];
-    const uvs = [];
-    const indices = [];
-    const up = new THREE.Vector3(0,1,0);
-    for (let i=0;i<=segments;i++){
-      const t = i/segments;
-      const p = curve.getPointAt(t);
-      const tangent = curve.getTangentAt(t).normalize();
-      const left = new THREE.Vector3().crossVectors(up, tangent).normalize();
-      const half = width/2;
-      const pl = p.clone().add(left.clone().multiplyScalar(half));
-      const pr = p.clone().add(left.clone().multiplyScalar(-half));
-      positions.push(pl.x, pl.y+0.02, pl.z);
-      positions.push(pr.x, pr.y+0.02, pr.z);
-      normals.push(0,1,0, 0,1,0);
-      uvs.push(t*10,0, t*10,1);
-      if (i<segments){
-        const a = i*2, b = i*2+1, c = (i+1)*2, d = (i+1)*2+1;
-        indices.push(a,c,b);
-        indices.push(b,c,d);
-      }
+btnClear.onclick = () => { clearTrack(); renderEditor(); };
+btnSave.onclick = () => { saveToLocal(); };
+btnLoad.onclick = () => { loadFromLocal(); renderEditor(); };
+btnDownload.onclick = () => { downloadJSON(); };
+fileInput.onchange = (e)=> { loadFromFile(e); };
+btnTest.onclick = ()=> { enterTestMode(); };
+btnEdit.onclick = ()=> { enterEditMode(); };
+
+/* ====== Editor helpers ====== */
+function addPointAt(x,z) {
+  const p = new THREE.Vector3(x,0,z);
+  points.push(p);
+  const m = makePointMesh(p);
+  pointMeshes.push(m);
+  scene.add(m);
+}
+
+function makePointMesh(pos) {
+  const g = new THREE.SphereGeometry(0.6,12,12);
+  const mat = new THREE.MeshStandardMaterial({color:0xff0000});
+  const m = new THREE.Mesh(g, mat);
+  m.position.copy(pos);
+  m.castShadow = true;
+  return m;
+}
+
+function clearTrack() {
+  // remove meshes
+  for (let m of pointMeshes) scene.remove(m);
+  pointMeshes.length = 0;
+  points.length = 0;
+  selectedPointIndex = -1;
+  if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
+  if (roadMesh) { scene.remove(roadMesh); roadMesh = null; }
+  for (let w of wallMeshes) scene.remove(w);
+  wallMeshes.length = 0;
+  for (let d of centerDashes) scene.remove(d);
+  centerDashes.length = 0;
+}
+
+/* ====== Mouse interactions for editor ====== */
+renderer.domElement.addEventListener('pointerdown', (ev)=>{
+  if (mode !== 'edit') return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  // intersect ground plane
+  const intersect = new THREE.Vector3();
+  raycaster.ray.intersectPlane(plane, intersect);
+  // check if clicked on existing point
+  let found = false;
+  for (let i=0;i<pointMeshes.length;i++){
+    const m = pointMeshes[i];
+    const dist = m.position.distanceTo(intersect);
+    if (dist < 1.2) { // select
+      selectedPointIndex = i;
+      dragging = true;
+      dragIndex = i;
+      found = true;
+      break;
     }
-    geometry.setIndex(indices);
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions,3));
-    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals,3));
-    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs,2));
-    geometry.computeBoundingBox();
-    geometry.computeVertexNormals();
-    return geometry;
   }
+  if (!found) {
+    addPointAt(intersect.x, intersect.z);
+    renderEditor();
+  }
+});
 
-  const roadGeom = buildRoad(curve, roadWidth, 1400); // più segmenti = tracciato più lungo e fluido
-  const asphaltMat = new THREE.MeshStandardMaterial({ color: 0x2f2f2f, roughness: 0.95 });
-  const roadMesh = new THREE.Mesh(roadGeom, asphaltMat);
+renderer.domElement.addEventListener('pointermove', (ev)=>{
+  if (mode !== 'edit') return;
+  if (!dragging) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  const intersect = new THREE.Vector3();
+  raycaster.ray.intersectPlane(plane, intersect);
+  if (dragIndex >= 0) {
+    points[dragIndex].x = intersect.x;
+    points[dragIndex].z = intersect.z;
+    pointMeshes[dragIndex].position.copy(points[dragIndex]);
+    renderEditor();
+  }
+});
+
+window.addEventListener('pointerup', ()=>{ dragging=false; dragIndex=-1; });
+
+window.addEventListener('keydown', (e)=>{
+  if (mode !== 'edit') return;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (selectedPointIndex >= 0) {
+      scene.remove(pointMeshes[selectedPointIndex]);
+      pointMeshes.splice(selectedPointIndex,1);
+      points.splice(selectedPointIndex,1);
+      selectedPointIndex = -1;
+      renderEditor();
+    }
+  }
+});
+
+/* ====== Render spline and road in editor ====== */
+function renderEditor() {
+  // remove old
+  if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
+  if (roadMesh) { scene.remove(roadMesh); roadMesh = null; }
+  for (let w of wallMeshes) scene.remove(w); wallMeshes.length=0;
+  for (let d of centerDashes) scene.remove(d); centerDashes.length=0;
+
+  if (points.length < 2) return;
+  // build CatmullRom closed if last equals first, else open
+  const pts = points.map(p=>p.clone());
+  // ensure closed if near
+  const closed = pts[0].distanceTo(pts[pts.length-1]) < 1.0;
+  const curve = new THREE.CatmullRomCurve3(pts, closed, 'catmullrom', 0.5);
+
+  // line
+  const linePts = curve.getPoints(Math.max(64, pts.length*12));
+  const geom = new THREE.BufferGeometry().setFromPoints(linePts);
+  const line = new THREE.Line(geom, lineMaterial);
+  splineMesh = line;
+  scene.add(line);
+
+  // road mesh
+  const width = parseFloat(roadWidthInput.value) || 7.2;
+  const roadGeom = buildRoad(curve, width, 400);
+  const roadMat = new THREE.MeshStandardMaterial({color:0x2f2f2f});
+  roadMesh = new THREE.Mesh(roadGeom, roadMat);
   roadMesh.receiveShadow = true;
-  roadGroup.add(roadMesh);
+  scene.add(roadMesh);
 
-  // center dashed line
-  function addCenterDashes(curve, dashLen=3, gap=2) {
-    const totalLen = curve.getLength();
-    let traveled = 0;
-    while (traveled < totalLen) {
-      const u = traveled / totalLen;
-      const t = curve.getUtoTmapping(u);
-      const p = curve.getPointAt(t);
-      const tangent = curve.getTangentAt(t).normalize();
-      const dash = new THREE.Mesh(new THREE.BoxGeometry(0.12,0.02,dashLen), new THREE.MeshStandardMaterial({ color:0xffd24d, emissive:0xffd24d, emissiveIntensity:0.2 }));
-      dash.position.copy(p).add(new THREE.Vector3(0,0.03,0));
-      const yaw = Math.atan2(tangent.x, tangent.z);
-      dash.rotation.y = yaw;
-      roadGroup.add(dash);
-      traveled += dashLen + gap;
-    }
-  }
+  // walls
+  const wallH = parseFloat(wallHeightInput.value) || 2.0;
+  addWallsAlongCurve(curve, width/2 + 1.2, wallH, 1.0);
+  addWallsAlongCurve(curve, -(width/2 + 1.2), wallH, 1.0);
+
+  // center dashes
   addCenterDashes(curve);
+}
 
-  // walls (più bassi) lungo il tracciato per effetto "street circuit"
-  const walls = [];
-  function addWallsAlongCurve(curve, offsetX, height, thickness) {
-    const segments = 700;
-    for (let i=0;i<segments;i++){
-      const t = i/segments;
-      const p = curve.getPointAt(t);
-      const tangent = curve.getTangentAt(t).normalize();
-      const left = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), tangent).normalize();
-      const pos = p.clone().add(left.clone().multiplyScalar(offsetX));
-      const box = new THREE.Mesh(new THREE.BoxGeometry(thickness, height, 6), new THREE.MeshStandardMaterial({ color:0x666666 }));
-      box.position.copy(pos);
-      box.lookAt(pos.clone().add(tangent));
-      box.position.y = height/2;
-      scene.add(box);
-      walls.push(box);
+/* Road builder reused from earlier examples */
+function buildRoad(curve, width, segments) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  const up = new THREE.Vector3(0,1,0);
+  for (let i=0;i<=segments;i++){
+    const t = i/segments;
+    const p = curve.getPointAt(t);
+    const tangent = curve.getTangentAt(t).normalize();
+    const left = new THREE.Vector3().crossVectors(up, tangent).normalize();
+    const half = width/2;
+    const pl = p.clone().add(left.clone().multiplyScalar(half));
+    const pr = p.clone().add(left.clone().multiplyScalar(-half));
+    positions.push(pl.x, pl.y+0.02, pl.z);
+    positions.push(pr.x, pr.y+0.02, pr.z);
+    normals.push(0,1,0, 0,1,0);
+    uvs.push(t*10,0, t*10,1);
+    if (i<segments){
+      const a = i*2, b = i*2+1, c = (i+1)*2, d = (i+1)*2+1;
+      indices.push(a,c,b);
+      indices.push(b,c,d);
     }
   }
-  // muri più bassi per richiesta
-  addWallsAlongCurve(curve, roadWidth/2 + 1.2, 2.0, 1.0);
-  addWallsAlongCurve(curve, -(roadWidth/2 + 1.2), 2.0, 1.0);
+  geometry.setIndex(indices);
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions,3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals,3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs,2));
+  geometry.computeBoundingBox();
+  geometry.computeVertexNormals();
+  return geometry;
+}
 
-  // decorative objects
-  const crateMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
-  for (let i=0;i<60;i++){
-    const t = (i/60);
+function addWallsAlongCurve(curve, offsetX, height, thickness) {
+  const segments = 200;
+  for (let i=0;i<segments;i++){
+    const t = i/segments;
     const p = curve.getPointAt(t);
     const tangent = curve.getTangentAt(t).normalize();
     const left = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), tangent).normalize();
-    const pos = p.clone().add(left.clone().multiplyScalar(roadWidth/2 + 2.2));
-    const c = new THREE.Mesh(new THREE.BoxGeometry(1.0,0.7,1.0), crateMat);
-    c.position.set(pos.x, 0.35, pos.z);
-    scene.add(c);
-    const pos2 = p.clone().add(left.clone().multiplyScalar(-(roadWidth/2 + 2.2)));
-    const c2 = c.clone();
-    c2.position.set(pos2.x, 0.35, pos2.z);
-    scene.add(c2);
+    const pos = p.clone().add(left.clone().multiplyScalar(offsetX));
+    const box = new THREE.Mesh(new THREE.BoxGeometry(thickness, height, 6), new THREE.MeshStandardMaterial({ color:0x666666 }));
+    box.position.copy(pos);
+    box.lookAt(pos.clone().add(tangent));
+    box.position.y = height/2;
+    scene.add(box);
+    wallMeshes.push(box);
   }
+}
 
-  // ====== centerline samples for AI and lap detection ======
-  const centerline = [];
+function addCenterDashes(curve, dashLen=3, gap=2) {
+  const totalLen = curve.getLength();
+  let traveled = 0;
+  while (traveled < totalLen) {
+    const u = traveled / totalLen;
+    const t = curve.getUtoTmapping(u);
+    const p = curve.getPointAt(t);
+    const tangent = curve.getTangentAt(t).normalize();
+    const dash = new THREE.Mesh(new THREE.BoxGeometry(0.12,0.02,dashLen), new THREE.MeshStandardMaterial({ color:0xffd24d }));
+    dash.position.copy(p).add(new THREE.Vector3(0,0.03,0));
+    const yaw = Math.atan2(tangent.x, tangent.z);
+    dash.rotation.y = yaw;
+    scene.add(dash);
+    centerDashes.push(dash);
+    traveled += dashLen + gap;
+  }
+}
+
+/* ====== Save / Load ====== */
+function saveToLocal() {
+  const data = {
+    points: points.map(p=>({x:p.x,z:p.z})),
+    roadWidth: parseFloat(roadWidthInput.value),
+    wallHeight: parseFloat(wallHeightInput.value)
+  };
+  localStorage.setItem('trackData', JSON.stringify(data));
+  alert('Tracciato salvato in localStorage');
+}
+
+function loadFromLocal() {
+  const raw = localStorage.getItem('trackData');
+  if (!raw) { alert('Nessun tracciato salvato'); return; }
+  const data = JSON.parse(raw);
+  applyTrackData(data);
+}
+
+function downloadJSON() {
+  const data = {
+    points: points.map(p=>({x:p.x,z:p.z})),
+    roadWidth: parseFloat(roadWidthInput.value),
+    wallHeight: parseFloat(wallHeightInput.value)
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'track.json'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function loadFromFile(e) {
+  const f = e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = ()=> {
+    const data = JSON.parse(reader.result);
+    applyTrackData(data);
+    renderEditor();
+  };
+  reader.readAsText(f);
+}
+
+function applyTrackData(data) {
+  clearTrack();
+  if (!data || !data.points) return;
+  for (let pt of data.points) addPointAt(pt.x, pt.z);
+  roadWidthInput.value = data.roadWidth || roadWidthInput.value;
+  wallHeightInput.value = data.wallHeight || wallHeightInput.value;
+}
+
+/* ====== Test mode: spawn car and run simulation ====== */
+let player, ai, playerState, aiState, wallBoxes = [], centerline = [];
+function enterTestMode() {
+  if (points.length < 2) { alert('Disegna almeno 2 punti per il tracciato'); return; }
+  mode = 'test';
+  btnTest.disabled = true; btnEdit.disabled = false;
+  // hide editor point meshes and UI interactions
+  for (let m of pointMeshes) m.visible = false;
+  // build final curve and centerline samples
+  const pts = points.map(p=>p.clone());
+  const closed = pts[0].distanceTo(pts[pts.length-1]) < 1.0;
+  const curve = new THREE.CatmullRomCurve3(pts, closed, 'catmullrom', 0.5);
+  centerline = [];
   const samples = 2400;
   for (let i=0;i<samples;i++){
     const t = i/samples;
     const p = curve.getPointAt(t);
-    centerline.push(new THREE.Vector3(p.x, 0, p.z));
+    centerline.push(new THREE.Vector3(p.x,0,p.z));
   }
+  // compute wall boxes
+  wallBoxes = wallMeshes.map(w => new THREE.Box3().setFromObject(w));
+  // spawn player and ai
+  spawnVehicles(curve);
+  // reposition camera will be handled in animate
+}
 
-  // ====== Player car (spawn on track) ======
-  const car = new THREE.Group();
-  const startT = 0.02; // spawn t sulla spline
-  const startPoint = curve.getPointAt(startT);
-  const startTangent = curve.getTangentAt(startT).normalize();
-  car.position.set(startPoint.x, 0.5, startPoint.z);
-  car.rotation.y = Math.atan2(startTangent.x, startTangent.z);
-  scene.add(car);
+function enterEditMode() {
+  mode = 'edit';
+  btnTest.disabled = false; btnEdit.disabled = true;
+  // remove vehicles
+  if (player) { scene.remove(player); player = null; }
+  if (ai) { scene.remove(ai); ai = null; }
+  // show points
+  for (let m of pointMeshes) m.visible = true;
+  // reset camera to overview
+  camera.position.set(0,60,120); camera.lookAt(0,0,0);
+}
 
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0055ff, metalness:0.3, roughness:0.4 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), bodyMat);
-  body.castShadow = true;
-  body.position.y = 0.4;
-  car.add(body);
+/* spawn player and ai on curve */
+function spawnVehicles(curve) {
+  // remove previous
+  if (player) scene.remove(player);
+  if (ai) scene.remove(ai);
 
-  const cockpit = new THREE.Mesh(new THREE.BoxGeometry(1.2,0.4,1.2), new THREE.MeshStandardMaterial({ color:0x111111 }));
-  cockpit.position.set(0,0.65,0.2);
-  cockpit.castShadow = true;
-  car.add(cockpit);
+  // player
+  player = new THREE.Group();
+  const startT = 0.02;
+  const startP = curve.getPointAt(startT);
+  const startTan = curve.getTangentAt(startT).normalize();
+  player.position.set(startP.x, 0.5, startP.z);
+  player.rotation.y = Math.atan2(startTan.x, startTan.z);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), new THREE.MeshStandardMaterial({color:0x0055ff}));
+  body.position.y = 0.4; player.add(body);
+  // wheels simple
+  scene.add(player);
 
-  const wheelMat = new THREE.MeshStandardMaterial({ color:0x111111 });
-  function makeWheel(x,z){
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.35,0.35,0.4,16), wheelMat);
-    w.rotation.z = Math.PI/2;
-    w.position.set(x,0.2,z);
-    w.castShadow = true;
-    car.add(w);
-    return w;
-  }
-  const wfl = makeWheel(-0.95,1.4);
-  const wfr = makeWheel(0.95,1.4);
-  const wrl = makeWheel(-0.95,-1.4);
-  const wrr = makeWheel(0.95,-1.4);
-
-  // ====== Camera on hood (muso visibile, prospettiva ravvicinata) ======
-  // camOffset è in coordinate locali della macchina: z positivo = avanti
-  const camOffset = new THREE.Vector3(0, 1.05, 2.2); // sul cofano, leggermente sopra il muso
-  const camLookOffset = new THREE.Vector3(0, 0.6, 12); // guarda avanti lungo la strada
-
-  // ====== Driving physics (bicycle model) ======
-  let velocity = 0;
-  let heading = car.rotation.y || 0;
-  let steerAngle = 0;
-  const maxSteer = THREE.MathUtils.degToRad(28);
-  const maxSpeed = 160;
-  const maxSpeedMs = maxSpeed / 3.6;
-  const accel = 28;
-  const brakeDecel = 80;
-  const drag = 1.8;
-  const wheelbase = 2.6;
-
-  const input = { forward:false, back:false, left:false, right:false, brake:false };
-  // supporto sia WASD che frecce
-  window.addEventListener('keydown', (e)=>{
-    if (e.code === 'KeyW' || e.code === 'ArrowUp') input.forward = true;
-    if (e.code === 'KeyS' || e.code === 'ArrowDown') input.back = true;
-    if (e.code === 'KeyA' || e.code === 'ArrowLeft') input.left = true;
-    if (e.code === 'KeyD' || e.code === 'ArrowRight') input.right = true;
-    if (e.code === 'Space') input.brake = true;
-  });
-  window.addEventListener('keyup', (e)=>{
-    if (e.code === 'KeyW' || e.code === 'ArrowUp') input.forward = false;
-    if (e.code === 'KeyS' || e.code === 'ArrowDown') input.back = false;
-    if (e.code === 'KeyA' || e.code === 'ArrowLeft') input.left = false;
-    if (e.code === 'KeyD' || e.code === 'ArrowRight') input.right = false;
-    if (e.code === 'Space') input.brake = false;
-  });
-
-  const speedEl = document.getElementById('speed');
-  const lapEl = document.getElementById('lap');
-  const statusEl = document.getElementById('status');
-
-  // Lap detection
-  let laps = 0;
-  const totalLaps = 3;
-  let lastIndexOnLine = 0;
-
-  // ====== AI car (spawn on track, veloce come il giocatore) ======
-  const ai = new THREE.Group();
+  // ai
+  ai = new THREE.Group();
+  const aiT = (startT + 0.85) % 1.0;
+  const aiP = curve.getPointAt(aiT);
+  const aiTan = curve.getTangentAt(aiT).normalize();
+  ai.position.set(aiP.x, 0.5, aiP.z);
+  ai.rotation.y = Math.atan2(aiTan.x, aiTan.z);
+  const aiBody = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), new THREE.MeshStandardMaterial({color:0xff5500}));
+  aiBody.position.y = 0.4; ai.add(aiBody);
   scene.add(ai);
-  const aiBody = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), new THREE.MeshStandardMaterial({ color:0xff5500 }));
-  aiBody.position.y = 0.4;
-  ai.add(aiBody);
-  // spawn AI qualche percentuale dietro il player sulla spline
-  let aiT = (startT + 0.85) % 1.0;
-  const aiStart = curve.getPointAt(aiT);
-  const aiTangent = curve.getTangentAt(aiT).normalize();
-  ai.position.set(aiStart.x, 0.5, aiStart.z);
-  ai.rotation.y = Math.atan2(aiTangent.x, aiTangent.z);
-  let aiIndex = Math.floor(centerline.length * 0.85);
-  let aiSpeed = maxSpeedMs * 0.85; // inizialmente vicino al giocatore
-  const aiMaxSpeed = maxSpeedMs * 0.98; // IA può raggiungere quasi la tua velocità
-  const aiMinSpeed = 6;
 
-  // Precompute wall bounding boxes
-  const wallBoxes = [];
-  function updateWallBoxes() {
-    wallBoxes.length = 0;
-    for (let w of walls) {
-      const box = new THREE.Box3().setFromObject(w);
-      wallBoxes.push(box);
+  // initialize states
+  playerState = {velocity:0, heading:player.rotation.y, steerAngle:0};
+  aiState = {speed:6, index: Math.floor(centerline.length*0.85)};
+
+  // set camera near hood
+  camera.position.copy(player.localToWorld(new THREE.Vector3(0,1.05,2.2)));
+  camera.lookAt(player.localToWorld(new THREE.Vector3(0,0.6,12)));
+}
+
+/* ====== Driving physics and AI (simplified) ====== */
+const input = {forward:false,back:false,left:false,right:false,brake:false};
+window.addEventListener('keydown', (e)=>{
+  if (mode !== 'test') return;
+  if (e.code === 'KeyW' || e.code === 'ArrowUp') input.forward = true;
+  if (e.code === 'KeyS' || e.code === 'ArrowDown') input.back = true;
+  if (e.code === 'KeyA' || e.code === 'ArrowLeft') input.left = true;
+  if (e.code === 'KeyD' || e.code === 'ArrowRight') input.right = true;
+  if (e.code === 'Space') input.brake = true;
+});
+window.addEventListener('keyup', (e)=>{
+  if (mode !== 'test') return;
+  if (e.code === 'KeyW' || e.code === 'ArrowUp') input.forward = false;
+  if (e.code === 'KeyS' || e.code === 'ArrowDown') input.back = false;
+  if (e.code === 'KeyA' || e.code === 'ArrowLeft') input.left = false;
+  if (e.code === 'KeyD' || e.code === 'ArrowRight') input.right = false;
+  if (e.code === 'Space') input.brake = false;
+});
+
+function updatePlayerPhysics(dt) {
+  if (!playerState) return;
+  const maxSteer = THREE.MathUtils.degToRad(28);
+  const wheelbase = 2.6;
+  const maxSpeedMs = 160/3.6;
+  const accel = 28, brakeDecel = 80, drag = 1.8;
+
+  // throttle
+  let throttle = 0;
+  if (input.forward) throttle += 1;
+  if (input.back) throttle -= 0.6;
+  if (input.brake) {
+    if (playerState.velocity > 0) playerState.velocity -= brakeDecel * dt;
+    else playerState.velocity = Math.max(playerState.velocity - brakeDecel*dt, -maxSpeedMs*0.5);
+  } else {
+    playerState.velocity += throttle * accel * dt;
+    const dragForce = drag * playerState.velocity * Math.abs(playerState.velocity) * 0.02;
+    playerState.velocity -= dragForce * dt;
+  }
+  playerState.velocity = THREE.MathUtils.clamp(playerState.velocity, -maxSpeedMs*0.6, maxSpeedMs);
+
+  // steering
+  let steerInput = 0;
+  if (input.left) steerInput = -1;
+  if (input.right) steerInput = 1;
+  const speedFactor = 1 - Math.min(1, Math.abs(playerState.velocity)/maxSpeedMs);
+  const targetSteer = steerInput * maxSteer * (0.6 + 0.4*speedFactor);
+  playerState.steerAngle = THREE.MathUtils.lerp(playerState.steerAngle || 0, targetSteer, dt*8);
+
+  // bicycle model
+  const dHeading = (playerState.velocity / Math.max(0.0001, wheelbase)) * Math.tan(playerState.steerAngle || 0);
+  playerState.heading += dHeading * dt;
+
+  // move
+  const forward = new THREE.Vector3(Math.sin(playerState.heading),0,Math.cos(playerState.heading));
+  player.position.addScaledVector(forward, playerState.velocity * dt);
+  player.rotation.y = playerState.heading;
+
+  // collisions with walls
+  const carBox = new THREE.Box3().setFromObject(player);
+  for (let wb of wallBoxes) {
+    if (carBox.intersectsBox(wb)) {
+      // push back
+      player.position.addScaledVector(forward, -Math.max(0.08, Math.abs(playerState.velocity)*0.02));
+      playerState.velocity *= -0.18;
     }
   }
-  updateWallBoxes();
+}
 
-  // Resize handling
-  window.addEventListener('resize', ()=> {
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera.aspect = window.innerWidth/window.innerHeight;
-    camera.updateProjectionMatrix();
-  });
+function updateAIPhysics(dt) {
+  if (!aiState) return;
+  // pure pursuit: lookahead index
+  const lookahead = 18;
+  let idx = aiState.index;
+  const targetIdx = (idx + lookahead) % centerline.length;
+  const target = centerline[targetIdx];
+  const toTarget = new THREE.Vector3(target.x - ai.position.x, 0, target.z - ai.position.z);
+  const dist = toTarget.length();
+  if (dist < 1.2) aiState.index = (aiState.index + 1) % centerline.length;
 
-  const clock = new THREE.Clock();
+  const desiredDir = toTarget.clone().normalize();
+  const desiredYaw = Math.atan2(desiredDir.x, desiredDir.z);
+  const yawDiff = Math.atan2(Math.sin(desiredYaw - ai.rotation.y), Math.cos(desiredYaw - ai.rotation.y));
+  ai.rotation.y += THREE.MathUtils.clamp(yawDiff, -dt*3.0, dt*3.0);
 
-  // Player update using bicycle model (sterzo corretto)
-  function updatePlayer(dt) {
-    // throttle/brake
-    let throttle = 0;
-    if (input.forward) throttle += 1;
-    if (input.back) throttle -= 0.6;
+  // speed control: simple curvature estimate
+  const nextIdx = (targetIdx + 8) % centerline.length;
+  const nextPoint = centerline[nextIdx];
+  const futureDir = new THREE.Vector3(nextPoint.x - target.x, 0, nextPoint.z - target.z).normalize();
+  const angleBetween = Math.acos(THREE.MathUtils.clamp(desiredDir.dot(futureDir), -1, 1));
+  const curveFactor = Math.min(1, angleBetween / (Math.PI/4));
+  const targetSpeed = THREE.MathUtils.lerp(14, 6, curveFactor);
 
-    if (input.brake) {
-      if (velocity > 0) velocity -= brakeDecel * dt;
-      else velocity = Math.max(velocity - brakeDecel * dt, -maxSpeedMs * 0.5);
-    } else {
-      velocity += throttle * accel * dt;
-      const dragForce = drag * velocity * Math.abs(velocity) * 0.02;
-      velocity -= dragForce * dt;
-    }
-    velocity = THREE.MathUtils.clamp(velocity, -maxSpeedMs * 0.6, maxSpeedMs);
+  if (aiState.speed < targetSpeed) aiState.speed += 10 * dt;
+  else aiState.speed -= 12 * dt;
+  aiState.speed = THREE.MathUtils.clamp(aiState.speed, 6, 14);
 
-    // steering input: left = -1, right = +1
-    let steerInput = 0;
-    if (input.left) steerInput = -1;
-    if (input.right) steerInput = 1;
+  // move forward
+  const forward = new THREE.Vector3(Math.sin(ai.rotation.y),0,Math.cos(ai.rotation.y));
+  ai.position.addScaledVector(forward, aiState.speed * dt);
 
-    // reduce steering at high speed
-    const speedFactor = 1 - Math.min(1, Math.abs(velocity) / maxSpeedMs);
-    const targetSteer = steerInput * maxSteer * (0.6 + 0.4 * speedFactor);
-    steerAngle = THREE.MathUtils.lerp(steerAngle, targetSteer, dt * 8);
-
-    // bicycle model: dHeading = v / L * tan(steerAngle)
-    const dHeading = (velocity / Math.max(0.0001, wheelbase)) * Math.tan(steerAngle);
-    heading += dHeading * dt;
-
-    // move car forward according to heading
-    const forwardVec = new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading));
-    car.position.addScaledVector(forwardVec, velocity * dt);
-    car.rotation.y = heading;
-
-    // wheel visuals
-    const wheelSpin = velocity * dt * 6;
-    wfl.rotation.x -= wheelSpin;
-    wfr.rotation.x -= wheelSpin;
-    wrl.rotation.x -= wheelSpin;
-    wrr.rotation.x -= wheelSpin;
-  }
-
-  // AI update: pure pursuit with lookahead, now able to match player's speed
-  function updateAI(dt) {
-    if (centerline.length === 0) return;
-    // find nearest index to AI (approx)
-    let nearest = aiIndex;
-    // lookahead index
-    const lookahead = 22;
-    let lookIndex = (nearest + lookahead) % centerline.length;
-    const target = centerline[lookIndex];
-
-    const toTarget = new THREE.Vector3(target.x - ai.position.x, 0, target.z - ai.position.z);
-    const dist = toTarget.length();
-    if (dist < 1.2) {
-      aiIndex = (aiIndex + 1) % centerline.length;
-      lookIndex = (aiIndex + lookahead) % centerline.length;
-    }
-
-    const desiredDir = toTarget.clone().normalize();
-    const currentYaw = ai.rotation.y || 0;
-    const desiredYaw = Math.atan2(desiredDir.x, desiredDir.z);
-    let yawDiff = Math.atan2(Math.sin(desiredYaw - currentYaw), Math.cos(desiredYaw - currentYaw));
-
-    // curvature estimate for speed control
-    const nextIdx = (lookIndex + 8) % centerline.length;
-    const nextPoint = centerline[nextIdx];
-    const futureDir = new THREE.Vector3(nextPoint.x - target.x, 0, nextPoint.z - target.z).normalize();
-    const angleBetween = Math.acos(THREE.MathUtils.clamp(desiredDir.dot(futureDir), -1, 1));
-    const curveFactor = Math.min(1, angleBetween / (Math.PI/4));
-    const targetSpeed = THREE.MathUtils.lerp(aiMaxSpeed, aiMinSpeed, curveFactor);
-
-    // wall avoidance
-    let avoid = 0;
-    for (let wb of wallBoxes) {
-      const expanded = wb.clone().expandByScalar(1.6);
-      const aiBox = new THREE.Box3().setFromObject(ai);
-      if (aiBox.intersectsBox(expanded)) {
-        avoid = 1;
-        break;
-      }
-    }
-
-    // adjust aiSpeed smoothly toward targetSpeed (can reach player's speed)
-    if (aiSpeed < targetSpeed) aiSpeed += 10 * dt;
-    else aiSpeed -= 12 * dt;
-    aiSpeed = THREE.MathUtils.clamp(aiSpeed, aiMinSpeed, aiMaxSpeed);
-
-    if (avoid) {
-      aiSpeed *= 0.55;
-      yawDiff += (Math.random() > 0.5 ? 1 : -1) * 0.6;
-    }
-
-    // rotate gradually
-    const maxYawRate = dt * 3.0;
-    yawDiff = THREE.MathUtils.clamp(yawDiff, -maxYawRate, maxYawRate);
-    ai.rotation.y += yawDiff;
-
-    // move forward
-    const moveForward = new THREE.Vector3(Math.sin(ai.rotation.y), 0, Math.cos(ai.rotation.y));
-    ai.position.addScaledVector(moveForward, aiSpeed * dt);
-  }
-
-  // Collision detection and correction for player (muri)
-  function handleCollisions() {
-    const carBox = new THREE.Box3().setFromObject(car);
-    let collided = false;
-    for (let wb of wallBoxes) {
-      if (carBox.intersectsBox(wb)) {
-        collided = true;
-        // push car back along its forward vector
-        const forward = new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading));
-        car.position.addScaledVector(forward, -Math.max(0.08, Math.abs(velocity) * 0.02));
-        velocity *= -0.18;
-      }
-    }
-    // off-road penalty (grass) approximate
-    let nearestDist = Infinity;
-    for (let i=0;i<centerline.length;i+=12){
-      const d = car.position.distanceTo(centerline[i]);
-      if (d < nearestDist) nearestDist = d;
-    }
-    if (nearestDist > roadWidth/2 + 1.2) {
-      velocity *= 0.96;
-      statusEl.textContent = 'Status: On grass';
-    } else if (!collided) {
-      statusEl.textContent = 'Status: Racing';
+  // wall avoidance simple
+  const aiBox = new THREE.Box3().setFromObject(ai);
+  for (let wb of wallBoxes) {
+    const expanded = wb.clone().expandByScalar(1.6);
+    if (aiBox.intersectsBox(expanded)) {
+      ai.position.addScaledVector(forward, -0.5);
+      aiState.speed *= 0.6;
+      ai.rotation.y += (Math.random()>0.5?1:-1)*0.4;
     }
   }
+}
 
-  // Lap detection by progress along centerline
-  function updateLap() {
-    let nearest = 0;
-    let best = Infinity;
-    for (let i=0;i<centerline.length;i+=8){
-      const d = car.position.distanceTo(centerline[i]);
-      if (d < best) { best = d; nearest = i; }
-    }
-    if (nearest < lastIndexOnLine && lastIndexOnLine > centerline.length*0.8) {
-      laps++;
-      lapEl.textContent = `Lap: ${laps} / ${totalLaps}`;
-      if (laps >= totalLaps) {
-        statusEl.textContent = 'Status: Race Finished';
-        velocity = 0;
-      } else {
-        statusEl.textContent = `Status: Lap ${laps} completed`;
-        setTimeout(()=> statusEl.textContent = 'Status: Racing', 1200);
-      }
-    }
-    lastIndexOnLine = nearest;
-  }
-
-  // Main loop
-  function animate(){
-    const dt = Math.min(0.05, clock.getDelta());
-
-    updatePlayer(dt);
-    handleCollisions();
-    updateAI(dt);
-
-    // camera on hood: compute world position from car local offset and look ahead
-    const desiredCamPos = car.localToWorld(camOffset.clone());
-    camera.position.lerp(desiredCamPos, dt*8);
-    const lookAtWorld = car.localToWorld(camLookOffset.clone());
-    camera.lookAt(lookAtWorld);
-
-    // HUD
-    const kmh = Math.round(velocity * 3.6);
-    speedEl.textContent = `Speed: ${kmh} km/h`;
-
-    updateLap();
-
+/* ====== Animation loop ====== */
+const clock = new THREE.Clock();
+function animate(){
+  const dt = Math.min(0.05, clock.getDelta());
+  if (mode === 'edit') {
+    // simple orbit-like camera for editing
     renderer.render(scene, camera);
-    requestAnimationFrame(animate);
+  } else {
+    updatePlayerPhysics(dt);
+    updateAIPhysics(dt);
+    // camera on hood
+    const camPos = player.localToWorld(new THREE.Vector3(0,1.05,2.2));
+    camera.position.lerp(camPos, dt*8);
+    const lookAt = player.localToWorld(new THREE.Vector3(0,0.6,12));
+    camera.lookAt(lookAt);
+    renderer.render(scene, camera);
   }
+  requestAnimationFrame(animate);
+}
+animate();
 
-  // initialize
-  updateWallBoxes();
-  statusEl.textContent = 'Status: Racing';
-  animate();
-  </script>
+/* ====== Utilities ====== */
+function download(filename, text) {
+  const blob = new Blob([text], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ====== Initialize editor with a sample Monaco-like layout ====== */
+(function seedSample(){
+  // sample control points to start with
+  const sample = [
+    {x:0,z:-220},{x:0,z:-160},{x:12,z:-130},{x:28,z:-100},{x:36,z:-60},
+    {x:30,z:-20},{x:18,z:10},{x:6,z:36},{x:-6,z:60},{x:-28,z:80},
+    {x:-48,z:60},{x:-56,z:20},{x:-48,z:-20},{x:-30,z:-60},{x:-12,z:-100},{x:6,z:-140},{x:0,z:-220}
+  ];
+  for (let p of sample) addPointAt(p.x,p.z);
+  renderEditor();
+})();
+</script>
 </body>
 </html>
-
