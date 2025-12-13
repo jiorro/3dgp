@@ -795,16 +795,30 @@ function animate(){
     updateAIPhysics(dt);
 
     // camera follow stabile e orizzontale in Test
-    if (player) {
-      camera.up.set(0,1,0); // garantisce orizzontalità
-      const followOffset = new THREE.Vector3(0, 6, -10);
-      followOffset.applyAxisAngle(new THREE.Vector3(0,1,0), player.rotation.y);
-      const desired = player.position.clone().add(followOffset);
-      camera.position.lerp(desired, Math.min(1, dt * 3.0));
-      const lookTarget = player.position.clone().add(new THREE.Vector3(0, 1, 0));
-      camera.lookAt(lookTarget);
-      camera.rotation.z = 0; // rimuove roll residuo
-    }
+   // camera follow stabile e orizzontale in Test
+if (player) {
+  // garantisce up verticale
+  camera.up.set(0,1,0);
+
+  // offset desiderato rispetto alla macchina (y = altezza, z = distanza dietro)
+  // NOTA: applichiamo la rotazione Y solo alla posizione dell'offset, così la camera resta "dietro" l'auto
+  const followOffset = new THREE.Vector3(0, 6, -10).applyAxisAngle(new THREE.Vector3(0,1,0), player.rotation.y);
+
+  // posizione target della camera (world)
+  const desired = player.position.clone().add(followOffset);
+
+  // interpolazione morbida per evitare scatti
+  camera.position.lerp(desired, Math.min(1, dt * 3.0));
+
+  // guarda il punto orizzontale alla stessa altezza della camera per evitare pitch
+  const lookTarget = player.position.clone();
+  lookTarget.y = camera.position.y; // forza stessa altezza -> sguardo orizzontale
+  camera.lookAt(lookTarget);
+
+  // rimuove eventuale roll residuo
+  camera.rotation.z = 0;
+}
+
 
     renderer.render(scene, camera);
   }
