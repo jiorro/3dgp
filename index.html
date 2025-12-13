@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>Editor Tracciato Avanzato - Full</title>
+<title>Editor Tracciato Avanzato - Full (Road Fix)</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
@@ -178,6 +178,15 @@ let selectedEntity = null;
 let spawnT = 0.02;
 let spawnPoint = null;
 
+/* Road visuals - FIXED MATERIAL */
+const roadMaterial = new THREE.MeshStandardMaterial({
+  color: 0x555555,
+  metalness: 0.05,
+  roughness: 0.85,
+  side: THREE.DoubleSide
+});
+const dashMaterial = new THREE.MeshStandardMaterial({color:0xffd24d, emissive:0xffd24d, emissiveIntensity:0.2});
+
 /* Hood texture */
 let hoodTexture = null;
 
@@ -260,7 +269,6 @@ renderer.domElement.addEventListener('pointerdown', (ev)=>{
       const left = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), tan).normalize();
       const gap = parseFloat(wallGapInput.value) || 1.2;
       const roadHalf = (parseFloat(roadWidthInput.value) || 7.2) / 2;
-      // determine side by click relative to centerline
       const nearest = findNearestOnCenterline(p, curve.getPoints(200));
       const side = (nearest && nearest.lateral < 0) ? -1 : 1;
       const offset = left.clone().multiplyScalar(side * (roadHalf + gap));
@@ -363,9 +371,13 @@ function renderEditor() {
   if (document.getElementById('showRoad').checked) {
     const width = parseFloat(roadWidthInput.value) || 7.2;
     const roadGeom = buildRoad(curve, width, 600);
-    roadMesh = new THREE.Mesh(roadGeom, roadMaterial);
-    roadMesh.receiveShadow = true;
-    scene.add(roadMesh);
+    if (roadGeom) {
+      roadMesh = new THREE.Mesh(roadGeom, roadMaterial);
+      roadMesh.receiveShadow = true;
+      roadMesh.position.y = 0.02; // solleva la strada per evitare z-fighting
+      roadMesh.renderOrder = 1;
+      scene.add(roadMesh);
+    }
   }
 
   addCenterDashes(curve);
