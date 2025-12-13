@@ -2,23 +2,24 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>Track Editor + Test - F1 Cittadina (Controls & Camera)</title>
+<title>Editor Tracciato - Strada tra Muri (Top-down)</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
   #container{width:100%;height:100%;position:relative;overflow:hidden}
-  .panel{position:absolute;left:12px;top:12px;background:rgba(0,0,0,0.5);padding:10px;border-radius:8px;z-index:10}
+  .panel{position:absolute;left:12px;top:12px;background:rgba(0,0,0,0.6);padding:10px;border-radius:8px;z-index:10;min-width:260px}
   .panel h3{margin:0 0 6px 0;font-size:14px}
-  .panel button,input,select{margin:4px 2px;padding:6px;font-size:13px}
+  .panel button,input,label{margin:4px 2px;padding:6px;font-size:13px}
   .hint{position:absolute;right:12px;bottom:12px;background:rgba(0,0,0,0.35);padding:8px;border-radius:6px;font-size:12px}
   #fileInput{display:none}
+  .small{font-size:12px;color:#ddd}
 </style>
 </head>
 <body>
 <div id="container"></div>
 
 <div class="panel" id="ui">
-  <h3>Track Editor</h3>
+  <h3>Track Editor (Top-down)</h3>
   <div>
     <button id="btnClear">Clear</button>
     <button id="btnSave">Save</button>
@@ -31,18 +32,22 @@
     <label>Wall Height <input id="wallHeight" type="number" value="2.0" step="0.1" style="width:70px"></label>
   </div>
   <div style="margin-top:6px">
+    <label><input type="checkbox" id="wallsToggle" checked> Walls around road</label>
+    <label class="small" title="Distanza muro-carreggiata">Wall gap <input id="wallGap" type="number" value="1.2" step="0.1" style="width:60px"></label>
+  </div>
+  <div style="margin-top:6px">
     <button id="btnTest">Test Track</button>
     <button id="btnEdit" disabled>Edit Track</button>
   </div>
-  <p style="font-size:12px;margin:6px 0 0 0">Click to add points. Drag to move. Select point and press Delete to remove.</p>
+  <p class="small" style="margin:6px 0 0 0">Click per aggiungere punti; trascina per spostare; seleziona punto e premi Delete per rimuovere.</p>
 </div>
 
-<div class="hint">Controls: W/S or ArrowUp/ArrowDown accelerate/brake, A/D or ArrowLeft/ArrowRight steer; Middle click to change camera</div>
+<div class="hint">Controls: W/S accelerate/brake, A/D steer; Middle click to change editor camera; Right-drag to orbit</div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
 
 <script>
-/* ====== Setup base scene ====== */
+/* ====== Setup scena ====== */
 const container = document.getElementById('container');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
@@ -52,23 +57,19 @@ renderer.shadowMap.enabled = true;
 container.appendChild(renderer.domElement);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
-camera.position.set(0, 60, 120);
-camera.lookAt(0,0,0);
+camera.up.set(0,1,0);
 
 const hemi = new THREE.HemisphereLight(0xffffff,0x444444,0.9); hemi.position.set(0,50,0); scene.add(hemi);
 const dir = new THREE.DirectionalLight(0xffffff,0.8); dir.position.set(-10,20,10); dir.castShadow=true; scene.add(dir);
 
-const groundMat = new THREE.MeshStandardMaterial({color:0x2b2b2b});
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000,2000), groundMat);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000,2000), new THREE.MeshStandardMaterial({color:0x2b2b2b}));
 ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
-
-const grassMat = new THREE.MeshStandardMaterial({color:0x2e8b57});
-const grass = new THREE.Mesh(new THREE.PlaneGeometry(2000,2000), grassMat);
+const grass = new THREE.Mesh(new THREE.PlaneGeometry(2000,2000), new THREE.MeshStandardMaterial({color:0x2e8b57}));
 grass.rotation.x = -Math.PI/2; grass.position.y = 0.001; scene.add(grass);
 
 /* ====== Editor state ====== */
 let mode = 'edit'; // 'edit' or 'test'
-const points = []; // THREE.Vector3[]
+const points = [];
 const pointMeshes = [];
 let selectedPointIndex = -1;
 
@@ -84,7 +85,7 @@ let dragging = false;
 let dragIndex = -1;
 const plane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
 
-/* UI elements */
+/* UI */
 const btnClear = document.getElementById('btnClear');
 const btnSave = document.getElementById('btnSave');
 const btnLoad = document.getElementById('btnLoad');
@@ -94,6 +95,8 @@ const btnTest = document.getElementById('btnTest');
 const btnEdit = document.getElementById('btnEdit');
 const roadWidthInput = document.getElementById('roadWidth');
 const wallHeightInput = document.getElementById('wallHeight');
+const wallsToggle = document.getElementById('wallsToggle');
+const wallGapInput = document.getElementById('wallGap');
 
 btnClear.onclick = () => { clearTrack(); renderEditor(); };
 btnSave.onclick = () => { saveToLocal(); };
@@ -103,7 +106,7 @@ fileInput.onchange = (e)=> { loadFromFile(e); };
 btnTest.onclick = ()=> { enterTestMode(); };
 btnEdit.onclick = ()=> { enterEditMode(); };
 
-/* ====== Editor helpers ====== */
+/* ====== Editor interactions ====== */
 function addPointAt(x,z) {
   const p = new THREE.Vector3(x,0,z);
   points.push(p);
@@ -134,7 +137,7 @@ function clearTrack() {
   centerDashes.length = 0;
 }
 
-/* ====== Mouse interactions for editor ====== */
+/* Mouse add/drag */
 renderer.domElement.addEventListener('pointerdown', (ev)=>{
   if (mode !== 'edit') return;
   const rect = renderer.domElement.getBoundingClientRect();
@@ -193,7 +196,7 @@ window.addEventListener('keydown', (e)=>{
   }
 });
 
-/* ====== Render spline and road in editor ====== */
+/* ====== Render editor: spline, road, optional walls ====== */
 function renderEditor() {
   if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
   if (roadMesh) { scene.remove(roadMesh); roadMesh = null; }
@@ -218,14 +221,18 @@ function renderEditor() {
   roadMesh.receiveShadow = true;
   scene.add(roadMesh);
 
-  const wallH = parseFloat(wallHeightInput.value) || 2.0;
-  addWallsAlongCurve(curve, width/2 + 1.2, wallH, 1.0);
-  addWallsAlongCurve(curve, -(width/2 + 1.2), wallH, 1.0);
+  // walls around road if enabled
+  if (wallsToggle.checked) {
+    const wallH = parseFloat(wallHeightInput.value) || 2.0;
+    const gap = parseFloat(wallGapInput.value) || 1.2;
+    addWallsAlongCurve(curve, width/2 + gap, wallH, 1.0);
+    addWallsAlongCurve(curve, -(width/2 + gap), wallH, 1.0);
+  }
 
   addCenterDashes(curve);
 }
 
-/* Road builder reused */
+/* Road builder */
 function buildRoad(curve, width, segments) {
   const geometry = new THREE.BufferGeometry();
   const positions = [];
@@ -300,7 +307,9 @@ function saveToLocal() {
   const data = {
     points: points.map(p=>({x:p.x,z:p.z})),
     roadWidth: parseFloat(roadWidthInput.value),
-    wallHeight: parseFloat(wallHeightInput.value)
+    wallHeight: parseFloat(wallHeightInput.value),
+    wallsEnabled: wallsToggle.checked,
+    wallGap: parseFloat(wallGapInput.value)
   };
   localStorage.setItem('trackData', JSON.stringify(data));
   alert('Tracciato salvato in localStorage');
@@ -317,7 +326,9 @@ function downloadJSON() {
   const data = {
     points: points.map(p=>({x:p.x,z:p.z})),
     roadWidth: parseFloat(roadWidthInput.value),
-    wallHeight: parseFloat(wallHeightInput.value)
+    wallHeight: parseFloat(wallHeightInput.value),
+    wallsEnabled: wallsToggle.checked,
+    wallGap: parseFloat(wallGapInput.value)
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -344,9 +355,11 @@ function applyTrackData(data) {
   for (let pt of data.points) addPointAt(pt.x, pt.z);
   roadWidthInput.value = data.roadWidth || roadWidthInput.value;
   wallHeightInput.value = data.wallHeight || wallHeightInput.value;
+  wallsToggle.checked = data.wallsEnabled !== undefined ? data.wallsEnabled : wallsToggle.checked;
+  wallGapInput.value = data.wallGap !== undefined ? data.wallGap : wallGapInput.value;
 }
 
-/* ====== Test mode: spawn car and run simulation ====== */
+/* ====== Test mode (spawn & simple physics) ====== */
 let player, ai, playerState, aiState, wallBoxes = [], centerline = [];
 function enterTestMode() {
   if (points.length < 2) { alert('Disegna almeno 2 punti per il tracciato'); return; }
@@ -363,6 +376,7 @@ function enterTestMode() {
     const p = curve.getPointAt(t);
     centerline.push(new THREE.Vector3(p.x,0,p.z));
   }
+  // compute wallBoxes for simple collision (only if walls exist)
   wallBoxes = wallMeshes.map(w => new THREE.Box3().setFromObject(w));
   spawnVehicles(curve);
 }
@@ -373,10 +387,12 @@ function enterEditMode() {
   if (player) { scene.remove(player); player = null; }
   if (ai) { scene.remove(ai); ai = null; }
   for (let m of pointMeshes) m.visible = true;
-  camera.position.set(0,60,120); camera.lookAt(0,0,0);
+  // set editor camera top-down immediately
+  editorCameraIndex = 0;
+  applyEditorCameraImmediate();
 }
 
-/* spawn player and ai on curve */
+/* spawn vehicles */
 function spawnVehicles(curve) {
   if (player) scene.remove(player);
   if (ai) scene.remove(ai);
@@ -404,23 +420,97 @@ function spawnVehicles(curve) {
   playerState = {velocity:0, heading:player.rotation.y, steerAngle:0};
   aiState = {speed:6, index: Math.floor(centerline.length*0.85)};
 
-  // camera initial mode
-  cameraMode = 'hood'; // 'hood' | 'third' | 'top'
+  cameraMode = 'hood';
   applyCameraModeImmediate();
 }
 
-/* ====== Controls mapping and camera modes ====== */
+/* ====== Editor camera modes (middle click cycles) ====== */
+let editorCameraIndex = 0; // 0 top, 1 orbit, 2 close
+const editorTop = {pos: new THREE.Vector3(0,120,0), look: new THREE.Vector3(0,0,0)};
+const editorOrbit = {pos: new THREE.Vector3(0,60,120), look: new THREE.Vector3(0,0,0)};
+const editorClose = {pos: new THREE.Vector3(0,18,60), look: new THREE.Vector3(0,0,0)};
 
-/* Input state */
+function applyEditorCameraImmediate() {
+  if (editorCameraIndex === 0) {
+    camera.position.copy(editorTop.pos);
+    camera.lookAt(editorTop.look);
+  } else if (editorCameraIndex === 1) {
+    camera.position.copy(editorOrbit.pos);
+    camera.lookAt(editorOrbit.look);
+  } else {
+    camera.position.copy(editorClose.pos);
+    camera.lookAt(editorClose.look);
+  }
+}
+
+function updateEditorCameraSmooth(dt) {
+  if (editorCameraIndex === 0) {
+    camera.position.lerp(editorTop.pos, dt*4);
+    camera.lookAt(editorTop.look);
+  } else if (editorCameraIndex === 1) {
+    camera.position.lerp(editorOrbit.pos, dt*4);
+    camera.lookAt(editorOrbit.look);
+  } else {
+    camera.position.lerp(editorClose.pos, dt*4);
+    camera.lookAt(editorClose.look);
+  }
+}
+
+/* Orbit controls in editor (right-drag) */
+let orbitYaw = 0, orbitPitch = 0, orbitDistance = 120;
+let orbitDragging = false, orbitLast = {x:0,y:0};
+renderer.domElement.addEventListener('contextmenu', (e)=>{ if (mode==='edit') e.preventDefault(); });
+renderer.domElement.addEventListener('mousedown', (e)=>{
+  if (e.button === 1) { // middle click cycles camera modes
+    if (mode === 'edit') {
+      editorCameraIndex = (editorCameraIndex + 1) % 3;
+      applyEditorCameraImmediate();
+    } else {
+      // in test mode handled separately
+      if (cameraMode === 'hood') cameraMode = 'third';
+      else if (cameraMode === 'third') cameraMode = 'top';
+      else cameraMode = 'hood';
+      applyCameraModeImmediate();
+    }
+  }
+  if (mode === 'edit' && e.button === 2) {
+    orbitDragging = true;
+    orbitLast.x = e.clientX; orbitLast.y = e.clientY;
+  }
+});
+window.addEventListener('mousemove', (e)=>{
+  if (mode === 'edit' && orbitDragging) {
+    const dx = (e.clientX - orbitLast.x) * 0.005;
+    const dy = (e.clientY - orbitLast.y) * 0.005;
+    orbitYaw += dx;
+    orbitPitch = Math.max(-1.2, Math.min(1.2, orbitPitch + dy));
+    orbitLast.x = e.clientX; orbitLast.y = e.clientY;
+    const center = new THREE.Vector3(0,0,0);
+    const x = Math.sin(orbitYaw) * orbitDistance * Math.cos(orbitPitch);
+    const y = Math.sin(orbitPitch) * orbitDistance;
+    const z = Math.cos(orbitYaw) * orbitDistance * Math.cos(orbitPitch);
+    editorOrbit.pos.set(x, Math.max(6,y), z);
+    editorOrbit.look.copy(center);
+    applyEditorCameraImmediate();
+  }
+});
+window.addEventListener('mouseup', ()=>{ orbitDragging = false; });
+
+// zoom with wheel in editor
+renderer.domElement.addEventListener('wheel', (e)=>{
+  if (mode === 'edit') {
+    orbitDistance = Math.max(20, Math.min(400, orbitDistance + e.deltaY * 0.1));
+    const x = Math.sin(orbitYaw) * orbitDistance * Math.cos(orbitPitch);
+    const y = Math.sin(orbitPitch) * orbitDistance;
+    const z = Math.cos(orbitYaw) * orbitDistance * Math.cos(orbitPitch);
+    editorOrbit.pos.set(x, Math.max(6,y), z);
+    applyEditorCameraImmediate();
+    e.preventDefault();
+  }
+}, {passive:false});
+
+/* ====== Test controls & camera ====== */
 const input = {forward:false,back:false,left:false,right:false,brake:false};
-
-/* KEY MAPPING FIXES:
-   - W / ArrowUp => forward
-   - S / ArrowDown => back
-   - A / ArrowLeft => steer LEFT
-   - D / ArrowRight => steer RIGHT
-   This mapping ensures A = left, D = right (not inverted).
-*/
 window.addEventListener('keydown', (e)=>{
   if (mode !== 'test') return;
   if (e.code === 'KeyW' || e.code === 'ArrowUp') input.forward = true;
@@ -438,14 +528,11 @@ window.addEventListener('keyup', (e)=>{
   if (e.code === 'Space') input.brake = false;
 });
 
-/* Camera modes: hood, third, top. Middle click cycles modes */
 let cameraMode = 'hood';
 const hoodOffset = new THREE.Vector3(0,1.05,2.2);
 const hoodLook = new THREE.Vector3(0,0.6,12);
 const thirdOffset = new THREE.Vector3(0,3.6,-8.5);
 const thirdLook = new THREE.Vector3(0,1.2,12);
-const topOffset = new THREE.Vector3(0, 40, 0);
-const topLook = new THREE.Vector3(0,0,0);
 
 function applyCameraModeImmediate() {
   if (!player) return;
@@ -456,47 +543,35 @@ function applyCameraModeImmediate() {
     camera.position.copy(player.localToWorld(thirdOffset.clone()));
     camera.lookAt(player.localToWorld(thirdLook.clone()));
   } else if (cameraMode === 'top') {
-    // top-down centered on player
     const topPos = player.position.clone().add(new THREE.Vector3(0,40,0));
     camera.position.copy(topPos);
-    camera.lookAt(player.position.clone().add(new THREE.Vector3(0,0,0)));
-  }
-}
-
-// cycle camera on middle click (mouse wheel)
-renderer.domElement.addEventListener('mousedown', (e)=>{
-  if (mode !== 'test') return;
-  if (e.button === 1) { // middle button
-    // cycle
-    if (cameraMode === 'hood') cameraMode = 'third';
-    else if (cameraMode === 'third') cameraMode = 'top';
-    else cameraMode = 'hood';
-    // immediate apply for snappy feedback
-    applyCameraModeImmediate();
-  }
-});
-
-/* Smooth camera interpolation each frame */
-function updateCameraSmooth(dt) {
-  if (!player) return;
-  if (cameraMode === 'hood') {
-    const desired = player.localToWorld(hoodOffset.clone());
-    camera.position.lerp(desired, dt*8);
-    const look = player.localToWorld(hoodLook.clone());
-    camera.lookAt(look);
-  } else if (cameraMode === 'third') {
-    const desired = player.localToWorld(thirdOffset.clone());
-    camera.position.lerp(desired, dt*6);
-    const look = player.localToWorld(thirdLook.clone());
-    camera.lookAt(look);
-  } else if (cameraMode === 'top') {
-    const desired = player.position.clone().add(new THREE.Vector3(0,40,0));
-    camera.position.lerp(desired, dt*4);
     camera.lookAt(player.position.clone());
   }
 }
 
-/* ====== Physics: player and AI ====== */
+function updateCameraSmooth(dt) {
+  if (mode === 'edit') updateEditorCameraSmooth(dt);
+  else {
+    if (!player) return;
+    if (cameraMode === 'hood') {
+      const desired = player.localToWorld(hoodOffset.clone());
+      camera.position.lerp(desired, dt*8);
+      const look = player.localToWorld(hoodLook.clone());
+      camera.lookAt(look);
+    } else if (cameraMode === 'third') {
+      const desired = player.localToWorld(thirdOffset.clone());
+      camera.position.lerp(desired, dt*6);
+      const look = player.localToWorld(thirdLook.clone());
+      camera.lookAt(look);
+    } else {
+      const desired = player.position.clone().add(new THREE.Vector3(0,40,0));
+      camera.position.lerp(desired, dt*4);
+      camera.lookAt(player.position.clone());
+    }
+  }
+}
+
+/* ====== Simple physics (player & AI) ====== */
 function updatePlayerPhysics(dt) {
   if (!playerState) return;
   const maxSteer = THREE.MathUtils.degToRad(28);
@@ -504,7 +579,6 @@ function updatePlayerPhysics(dt) {
   const maxSpeedMs = 160/3.6;
   const accel = 28, brakeDecel = 80, drag = 1.8;
 
-  // throttle: prefer exclusive forward/back handling to avoid inversion when both pressed
   let throttle = 0;
   if (input.forward && !input.back) throttle = 1;
   else if (input.back && !input.forward) throttle = -0.6;
@@ -520,33 +594,40 @@ function updatePlayerPhysics(dt) {
   }
   playerState.velocity = THREE.MathUtils.clamp(playerState.velocity, -maxSpeedMs*0.6, maxSpeedMs);
 
-  // steering: A = left, D = right (left => positive steerInput)
   let steerInput = 0;
-  if (input.left && !input.right) steerInput = 1;   // left
-  else if (input.right && !input.left) steerInput = -1; // right
+  if (input.left && !input.right) steerInput = 1;
+  else if (input.right && !input.left) steerInput = -1;
   else steerInput = 0;
 
   const speedFactor = 1 - Math.min(1, Math.abs(playerState.velocity) / maxSpeedMs);
   const targetSteer = steerInput * maxSteer * (0.6 + 0.4*speedFactor);
   playerState.steerAngle = THREE.MathUtils.lerp(playerState.steerAngle || 0, targetSteer, dt*8);
 
-  // bicycle model
   const dHeading = (playerState.velocity / Math.max(0.0001, wheelbase)) * Math.tan(playerState.steerAngle || 0);
   playerState.heading += dHeading * dt;
 
-  // move
   const forward = new THREE.Vector3(Math.sin(playerState.heading),0,Math.cos(playerState.heading));
   player.position.addScaledVector(forward, playerState.velocity * dt);
   player.rotation.y = playerState.heading;
 
-  // collisions with walls
-  const carBox = new THREE.Box3().setFromObject(player);
-  for (let wb of wallBoxes) {
-    if (carBox.intersectsBox(wb)) {
-      player.position.addScaledVector(forward, -Math.max(0.08, Math.abs(playerState.velocity)*0.02));
+  // collision: distance-based to centerline (robusto per piste spline)
+  if (centerline.length > 0) {
+    const res = findNearestOnCenterline(player.position, centerline);
+    const roadHalf = (parseFloat(roadWidthInput.value) || 7.2) / 2;
+    const wallMargin = parseFloat(wallGapInput.value) || 1.2;
+    const lateralAbs = Math.abs(res.lateral);
+    if (lateralAbs > roadHalf + wallMargin) {
+      // hit wall
+      player.position.addScaledVector(forward, -Math.max(0.08, Math.abs(playerState.velocity) * 0.02));
       playerState.velocity *= -0.18;
+    } else if (lateralAbs > roadHalf) {
+      // on grass
+      playerState.velocity *= 0.96;
     }
   }
+
+  // keep constant height to avoid micro-dossi
+  player.position.y = 0.5;
 }
 
 function updateAIPhysics(dt) {
@@ -592,16 +673,25 @@ function updateAIPhysics(dt) {
   const forward = new THREE.Vector3(Math.sin(ai.rotation.y),0,Math.cos(ai.rotation.y));
   ai.position.addScaledVector(forward, aiState.speed * dt);
 
-  // simple wall reaction
-  for (let wb of wallBoxes) {
-    const expanded = wb.clone().expandByScalar(1.2);
-    const aiBox2 = new THREE.Box3().setFromObject(ai);
-    if (aiBox2.intersectsBox(expanded)) {
-      ai.position.addScaledVector(forward, -0.5);
-      aiState.speed *= 0.6;
-      ai.rotation.y += (Math.random()>0.5?1:-1)*0.4;
-    }
+  // keep ai height constant
+  ai.position.y = 0.5;
+}
+
+/* helper: nearest on centerline */
+function findNearestOnCenterline(pos, centerlineArr) {
+  let bestIdx = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < centerlineArr.length; i++) {
+    const d = pos.distanceTo(centerlineArr[i]);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
   }
+  const next = centerlineArr[(bestIdx + 5) % centerlineArr.length];
+  const prev = centerlineArr[(bestIdx - 5 + centerlineArr.length) % centerlineArr.length];
+  const tangent = next.clone().sub(prev).normalize();
+  const left = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), tangent).normalize();
+  const vecToCar = pos.clone().sub(centerlineArr[bestIdx]);
+  const lateral = vecToCar.dot(left);
+  return { index: bestIdx, point: centerlineArr[bestIdx].clone(), tangent, lateral };
 }
 
 /* ====== Animation loop ====== */
@@ -609,6 +699,7 @@ const clock = new THREE.Clock();
 function animate(){
   const dt = Math.min(0.05, clock.getDelta());
   if (mode === 'edit') {
+    updateEditorCameraSmooth(dt);
     renderer.render(scene, camera);
   } else {
     updatePlayerPhysics(dt);
@@ -630,7 +721,7 @@ function download(filename, text) {
   URL.revokeObjectURL(a.href);
 }
 
-/* ====== Initialize editor with a sample Monaco-like layout ====== */
+/* ====== Initialize with sample Monaco-like layout and top-down editor view ====== */
 (function seedSample(){
   const sample = [
     {x:0,z:-220},{x:0,z:-160},{x:12,z:-130},{x:28,z:-100},{x:36,z:-60},
@@ -639,6 +730,9 @@ function download(filename, text) {
   ];
   for (let p of sample) addPointAt(p.x,p.z);
   renderEditor();
+  // set editor camera top-down by default
+  editorCameraIndex = 0;
+  applyEditorCameraImmediate();
 })();
 </script>
 </body>
