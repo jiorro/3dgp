@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
   <meta charset="utf-8" />
-  <title>F1 Cittadina - Prototype (HTML/CSS/JS)</title>
+  <title>F1 Cittadina - Full Prototype</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     html,body { height:100%; margin:0; background:#111; font-family:Arial,Helvetica,sans-serif; }
@@ -16,6 +16,7 @@
     .ui p { margin:4px 0; font-size:13px; }
     .ui .big { font-size:18px; font-weight:700; color:#ffd700; }
     .hint { position:absolute; right:12px; bottom:12px; color:#ddd; background:rgba(0,0,0,0.35); padding:8px 10px; border-radius:6px; font-size:12px; }
+    a.small { color:#9cf; font-size:12px; text-decoration:none; }
   </style>
 </head>
 <body>
@@ -58,109 +59,165 @@
 
   // ====== Ground and grass ======
   const groundMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b });
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), groundMat);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(800, 800), groundMat);
   ground.rotation.x = -Math.PI/2;
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // grass around road
   const grassMat = new THREE.MeshStandardMaterial({ color: 0x2e8b57, roughness:1 });
-  const grass = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), grassMat);
+  const grass = new THREE.Mesh(new THREE.PlaneGeometry(800, 800), grassMat);
   grass.rotation.x = -Math.PI/2;
   grass.position.y = 0.001;
   grass.receiveShadow = true;
   scene.add(grass);
 
-  // ====== Road (street circuit) ======
+  // ====== Road geometry along a spline (city circuit with curves) ======
   const roadGroup = new THREE.Group();
   scene.add(roadGroup);
 
-  const roadWidth = 8;      // narrower for city feel
-  const roadLength = 200;
+  const roadWidth = 8;
+  const roadLengthApprox = 260;
+
+  // Create a closed spline path with straights and curves
+  const pts = [];
+  // start straight
+  pts.push(new THREE.Vector3(0,0,-120));
+  pts.push(new THREE.Vector3(0,0,-60));
+  // right curve
+  pts.push(new THREE.Vector3(18,0,-30));
+  pts.push(new THREE.Vector3(36,0,0));
+  // top straight
+  pts.push(new THREE.Vector3(36,0,40));
+  // left curve
+  pts.push(new THREE.Vector3(18,0,70));
+  pts.push(new THREE.Vector3(0,0,90));
+  // return straight
+  pts.push(new THREE.Vector3(-24,0,60));
+  pts.push(new THREE.Vector3(-36,0,20));
+  pts.push(new THREE.Vector3(-36,0,-20));
+  pts.push(new THREE.Vector3(-18,0,-60));
+  pts.push(new THREE.Vector3(0,0,-120)); // close
+
+  const curve = new THREE.CatmullRomCurve3(pts, true, 'catmullrom', 0.5);
+
+  // create road mesh by sampling cross-sections along the spline
+  function buildRoad(curve, width, segments) {
+    const geometry = new THREE.BufferGeometry();
+    const positions = [];
+    const normals = [];
+    const uvs = [];
+    const indices = [];
+    const left = new THREE.Vector3();
+    const right = new THREE.Vector3();
+    const up = new THREE.Vector3(0,1,0);
+    for (let i=0;i<=segments;i++){
+      const t = i/segments;
+      const p = curve.getPointAt(t);
+      const tangent = curve.getTangentAt(t).normalize();
+      // compute left vector
+      left.crossVectors(up, tangent).normalize();
+      right.copy(left).multiplyScalar(-1);
+      const half = width/2;
+      const pl = p.clone().add(left.clone().multiplyScalar(half));
+      const pr = p.clone().add(right.clone().multiplyScalar(half));
+      positions.push(pl.x, pl.y+0.02, pl.z);
+      positions.push(pr.x, pr.y+0.02, pr.z);
+      normals.push(0,1,0, 0,1,0);
+      uvs.push(t*10,0, t*10,1);
+      if (i<segments){
+        const a = i*2, b = i*2+1, c = (i+1)*2, d = (i+1)*2+1;
+        indices.push(a,c,b);
+        indices.push(b,c,d);
+      }
+    }
+    geometry.setIndex(indices);
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions,3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals,3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs,2));
+    geometry.computeBoundingBox();
+    geometry.computeVertexNormals();
+    return geometry;
+  }
+
+  const roadGeom = buildRoad(curve, roadWidth, 600);
   const asphaltMat = new THREE.MeshStandardMaterial({ color: 0x2f2f2f, roughness: 0.95 });
-  const roadGeom = new THREE.PlaneGeometry(roadWidth, roadLength, 1, 1);
-  roadGeom.rotateX(-Math.PI/2);
   const roadMesh = new THREE.Mesh(roadGeom, asphaltMat);
   roadMesh.receiveShadow = true;
   roadGroup.add(roadMesh);
-  roadMesh.position.set(0, 0.02, 0);
 
-  // lane markings (dashed center)
-  function addDashedCenter() {
-    const dashLen = 3, gap = 2;
-    const count = Math.ceil(roadLength / (dashLen + gap));
-    for (let i=0;i<count;i++){
-      const mat = new THREE.MeshStandardMaterial({ color: 0xffd24d, emissive:0xffd24d, emissiveIntensity:0.2 });
-      const g = new THREE.BoxGeometry(0.12, 0.02, dashLen);
-      const m = new THREE.Mesh(g, mat);
-      const zpos = -roadLength/2 + i*(dashLen+gap) + dashLen/2;
-      m.position.set(0, 0.03, zpos);
-      roadGroup.add(m);
+  // center dashed line along spline
+  function addCenterDashes(curve, dashLen=3, gap=2) {
+    const totalLen = curve.getLength();
+    let traveled = 0;
+    while (traveled < totalLen) {
+      const t = curve.getUtoTmapping(traveled/totalLen);
+      const p = curve.getPointAt(t);
+      const tangent = curve.getTangentAt(t).normalize();
+      const up = new THREE.Vector3(0,1,0);
+      const left = new THREE.Vector3().crossVectors(up, tangent).normalize();
+      const dash = new THREE.Mesh(new THREE.BoxGeometry(0.12,0.02,dashLen), new THREE.MeshStandardMaterial({ color:0xffd24d, emissive:0xffd24d, emissiveIntensity:0.2 }));
+      dash.position.copy(p).add(new THREE.Vector3(0,0.03,0));
+      // align dash to tangent
+      const yaw = Math.atan2(tangent.x, tangent.z);
+      dash.rotation.y = yaw;
+      roadGroup.add(dash);
+      traveled += dashLen + gap;
     }
   }
-  addDashedCenter();
+  addCenterDashes(curve);
 
-  // sidewalks and buildings (simple boxes) to create city walls
-  const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x999999 });
-  function addSidewalk(x) {
-    const s = new THREE.Mesh(new THREE.BoxGeometry(2, 0.2, roadLength), sidewalkMat);
-    s.position.set(x, 0.1, 0);
-    s.receiveShadow = true;
-    s.castShadow = true;
-    roadGroup.add(s);
-  }
-  addSidewalk(-(roadWidth/2 + 1.1));
-  addSidewalk((roadWidth/2 + 1.1));
-
-  // buildings as visual walls (non-passable)
-  const buildingMat = new THREE.MeshStandardMaterial({ color: 0x666666, metalness:0.2, roughness:0.8 });
+  // sidewalks and walls along the road: create boxes offset from spline
   const walls = [];
-  function addBuildingWall(x, height, depthOffset=0) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(1.6, height, roadLength + depthOffset), buildingMat);
-    b.position.set(x, height/2, 0);
-    b.castShadow = true;
-    b.receiveShadow = true;
-    scene.add(b);
-    walls.push(b);
+  function addWallsAlongCurve(curve, offsetX, height, thickness) {
+    const segments = 200;
+    for (let i=0;i<segments;i++){
+      const t = i/segments;
+      const p = curve.getPointAt(t);
+      const tangent = curve.getTangentAt(t).normalize();
+      const left = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), tangent).normalize();
+      const pos = p.clone().add(left.clone().multiplyScalar(offsetX));
+      const box = new THREE.Mesh(new THREE.BoxGeometry(thickness, height, 6), new THREE.MeshStandardMaterial({ color:0x666666 }));
+      box.position.copy(pos);
+      box.lookAt(pos.clone().add(tangent));
+      box.position.y = height/2;
+      scene.add(box);
+      walls.push(box);
+    }
   }
-  // add walls close to road for tight city feel
-  addBuildingWall(-(roadWidth/2 + 3.2), 4, 20);
-  addBuildingWall((roadWidth/2 + 3.2), 4, 20);
+  // left and right walls close to road for tight street feel
+  addWallsAlongCurve(curve, roadWidth/2 + 1.6, 4.0, 1.2);
+  addWallsAlongCurve(curve, -(roadWidth/2 + 1.6), 4.0, 1.2);
 
-  // Add some decorative crates/boxes along sidewalks
+  // decorative objects along sidewalks
   const crateMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
-  for (let i= -90; i<=90; i+=12) {
+  for (let i=0;i<40;i++){
+    const t = i/40;
+    const p = curve.getPointAt(t);
+    const tangent = curve.getTangentAt(t).normalize();
+    const left = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), tangent).normalize();
+    const pos = p.clone().add(left.clone().multiplyScalar(roadWidth/2 + 2.6));
     const c = new THREE.Mesh(new THREE.BoxGeometry(1.2,0.8,1.2), crateMat);
-    c.position.set(-roadWidth/2 - 2.2, 0.4, i);
+    c.position.set(pos.x, 0.4, pos.z);
     scene.add(c);
+    const pos2 = p.clone().add(left.clone().multiplyScalar(-(roadWidth/2 + 2.6)));
     const c2 = c.clone();
-    c2.position.set(roadWidth/2 + 2.2, 0.4, i+4);
+    c2.position.set(pos2.x, 0.4, pos2.z);
     scene.add(c2);
   }
 
-  // ====== Centerline path for AI and lap detection (simple loop) ======
+  // ====== Centerline points array for AI ======
   const centerline = [];
-  // straight forward
-  for (let i=0;i<120;i++){
-    centerline.push(new THREE.Vector3(0, 0, -roadLength/2 + i * (roadLength/120)));
-  }
-  // tight city loop (semi-circle)
-  const loopRadius = 18;
-  const loopCenterZ = roadLength/2;
-  for (let i=0;i<64;i++){
-    const t = (i/63) * Math.PI;
-    const x = Math.cos(t) * loopRadius;
-    const z = loopCenterZ + Math.sin(t) * loopRadius;
-    centerline.push(new THREE.Vector3(x, 0, z));
-  }
-  // return straight
-  for (let i=0;i<120;i++){
-    centerline.push(new THREE.Vector3(0, 0, roadLength/2 - i * (roadLength/120)));
+  const samples = 800;
+  for (let i=0;i<samples;i++){
+    const t = i/samples;
+    const p = curve.getPointAt(t);
+    centerline.push(new THREE.Vector3(p.x, 0, p.z));
   }
 
   // ====== Player car ======
   const car = new THREE.Group();
-  car.position.set(0, 0.5, -roadLength/2 + 6);
+  const startPoint = curve.getPointAt(0.02);
+  car.position.set(startPoint.x, 0.5, startPoint.z);
   scene.add(car);
 
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0055ff, metalness:0.3, roughness:0.4 });
@@ -192,17 +249,17 @@
   const camOffset = new THREE.Vector3(0, 4.2, -8);
   const camLookOffset = new THREE.Vector3(0, 1.2, 0);
 
-  // ====== Driving physics (kinematic) ======
+  // ====== Driving physics (bicycle model) ======
   let velocity = 0;
   let heading = 0;
   let steerAngle = 0;
   const maxSteer = THREE.MathUtils.degToRad(28);
-  const maxSpeed = 140;
+  const maxSpeed = 160;
   const maxSpeedMs = maxSpeed / 3.6;
-  const accel = 26;
-  const brakeDecel = 60;
+  const accel = 28;
+  const brakeDecel = 80;
   const drag = 1.8;
-  const grip = 6.0;
+  const wheelbase = 2.6;
 
   const input = { forward:false, back:false, left:false, right:false, brake:false };
   window.addEventListener('keydown', (e)=>{
@@ -224,21 +281,24 @@
   const lapEl = document.getElementById('lap');
   const statusEl = document.getElementById('status');
 
-  // Lap detection
-  const startZ = car.position.z;
+  // Lap detection using projection on centerline
   let laps = 0;
   const totalLaps = 3;
-  let lastZ = car.position.z;
+  let lastIndexOnLine = 0;
 
-  // AI car
+  // ====== AI car (pure pursuit) ======
   const ai = new THREE.Group();
   scene.add(ai);
   const aiBody = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), new THREE.MeshStandardMaterial({ color:0xff5500 }));
   aiBody.position.y = 0.4;
   ai.add(aiBody);
-  ai.position.set(0,0.5, -roadLength/2 + 20);
-  let aiIndex = 0;
-  let aiSpeed = 10;
+  // place AI a bit behind player on the spline
+  let aiIndex = Math.floor(centerline.length * 0.85);
+  ai.position.copy(centerline[aiIndex]).add(new THREE.Vector3(0,0.5,0));
+  ai.rotation.y = 0;
+  let aiSpeed = 9;
+  const aiMaxSpeed = 14;
+  const aiMinSpeed = 6;
 
   // Precompute wall bounding boxes
   const wallBoxes = [];
@@ -248,12 +308,6 @@
       const box = new THREE.Box3().setFromObject(w);
       wallBoxes.push(box);
     }
-    // sidewalks as walls too (prevent driving on them)
-    roadGroup.children.forEach(child => {
-      if (child.geometry && child.geometry.type === 'BoxGeometry' && child.position.x !== 0) {
-        wallBoxes.push(new THREE.Box3().setFromObject(child));
-      }
-    });
   }
   updateWallBoxes();
 
@@ -266,88 +320,155 @@
 
   const clock = new THREE.Clock();
 
-  function animate(){
-    const dt = Math.min(0.05, clock.getDelta());
-
-    // Player input -> throttle/brake
+  // Player update using bicycle model
+  function updatePlayer(dt) {
+    // throttle/brake
     let throttle = 0;
     if (input.forward) throttle += 1;
     if (input.back) throttle -= 0.6;
 
     if (input.brake) {
       if (velocity > 0) velocity -= brakeDecel * dt;
-      else velocity = Math.max(velocity - brakeDecel*dt, -maxSpeedMs*0.5);
+      else velocity = Math.max(velocity - brakeDecel * dt, -maxSpeedMs * 0.5);
     } else {
       velocity += throttle * accel * dt;
       const dragForce = drag * velocity * Math.abs(velocity) * 0.02;
       velocity -= dragForce * dt;
     }
+    velocity = THREE.MathUtils.clamp(velocity, -maxSpeedMs * 0.6, maxSpeedMs);
 
-    velocity = THREE.MathUtils.clamp(velocity, -maxSpeedMs*0.6, maxSpeedMs);
-
-    // steering
+    // steering input: left = -1, right = +1
     let steerInput = 0;
-    if (input.left) steerInput = 1;
-    if (input.right) steerInput = -1;
-    const speedFactor = 1 - Math.min(1, Math.abs(velocity)/maxSpeedMs);
-    steerAngle = THREE.MathUtils.lerp(steerAngle, steerInput * maxSteer * (0.6 + 0.4*speedFactor), dt*6);
+    if (input.left) steerInput = -1;
+    if (input.right) steerInput = 1;
 
-    // heading and movement
-    const turnRadius = 1.0 / Math.max(0.0001, Math.tan(steerAngle));
-    const angularVel = (velocity / Math.max(1, Math.abs(turnRadius))) * (steerAngle === 0 ? 0 : Math.sign(steerAngle));
-    heading += angularVel * dt * (grip * 0.02);
+    // reduce steering at high speed
+    const speedFactor = 1 - Math.min(1, Math.abs(velocity) / maxSpeedMs);
+    const targetSteer = steerInput * maxSteer * (0.6 + 0.4 * speedFactor);
+    steerAngle = THREE.MathUtils.lerp(steerAngle, targetSteer, dt * 8);
 
+    // bicycle model: dHeading = v / L * tan(steerAngle)
+    const dHeading = (velocity / Math.max(0.0001, wheelbase)) * Math.tan(steerAngle);
+    heading += dHeading * dt;
+
+    // move car forward according to heading
     const forwardVec = new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading));
-    const prevPos = car.position.clone();
     car.position.addScaledVector(forwardVec, velocity * dt);
     car.rotation.y = heading;
 
-    // wheel spin visuals
+    // wheel visuals
     const wheelSpin = velocity * dt * 6;
     wfl.rotation.x -= wheelSpin;
     wfr.rotation.x -= wheelSpin;
     wrl.rotation.x -= wheelSpin;
     wrr.rotation.x -= wheelSpin;
+  }
 
-    // Collision: car bounding box vs walls
+  // AI update: pure pursuit with lookahead and simple wall avoidance
+  function updateAI(dt) {
+    if (centerline.length === 0) return;
+    // find nearest index to AI
+    let nearest = aiIndex;
+    // lookahead index
+    const lookahead = 18;
+    let lookIndex = (nearest + lookahead) % centerline.length;
+    const target = centerline[lookIndex];
+
+    // compute desired direction
+    const toTarget = new THREE.Vector3(target.x - ai.position.x, 0, target.z - ai.position.z);
+    const dist = toTarget.length();
+    if (dist < 1.2) {
+      aiIndex = (aiIndex + 1) % centerline.length;
+      lookIndex = (aiIndex + lookahead) % centerline.length;
+    }
+
+    const desiredDir = toTarget.clone().normalize();
+    const currentYaw = ai.rotation.y || 0;
+    const desiredYaw = Math.atan2(desiredDir.x, desiredDir.z);
+    let yawDiff = Math.atan2(Math.sin(desiredYaw - currentYaw), Math.cos(desiredYaw - currentYaw));
+
+    // speed control based on curvature: estimate curvature by angle to next few points
+    const nextIdx = (lookIndex + 6) % centerline.length;
+    const nextPoint = centerline[nextIdx];
+    const futureDir = new THREE.Vector3(nextPoint.x - target.x, 0, nextPoint.z - target.z).normalize();
+    const angleBetween = Math.acos(THREE.MathUtils.clamp(desiredDir.dot(futureDir), -1, 1));
+    const curveFactor = Math.min(1, angleBetween / (Math.PI/4));
+    const targetSpeed = THREE.MathUtils.lerp(aiMaxSpeed, aiMinSpeed, curveFactor);
+
+    // simple wall avoidance: if wall box intersects expanded AI box, steer away and slow
+    let avoid = 0;
+    for (let wb of wallBoxes) {
+      const expanded = wb.clone().expandByScalar(1.6);
+      const aiBox = new THREE.Box3().setFromObject(ai);
+      if (aiBox.intersectsBox(expanded)) {
+        avoid = 1;
+        break;
+      }
+    }
+
+    // adjust aiSpeed smoothly
+    if (aiSpeed < targetSpeed) aiSpeed += 6 * dt;
+    else aiSpeed -= 8 * dt;
+    aiSpeed = THREE.MathUtils.clamp(aiSpeed, aiMinSpeed, aiMaxSpeed);
+
+    if (avoid) {
+      aiSpeed *= 0.5;
+      // nudge yaw away from walls by adding small offset
+      yawDiff += (Math.random() > 0.5 ? 1 : -1) * 0.6;
+    }
+
+    // rotate gradually
+    const maxYawRate = dt * 2.2;
+    yawDiff = THREE.MathUtils.clamp(yawDiff, -maxYawRate, maxYawRate);
+    ai.rotation.y += yawDiff;
+
+    // move forward
+    const moveForward = new THREE.Vector3(Math.sin(ai.rotation.y), 0, Math.cos(ai.rotation.y));
+    ai.position.addScaledVector(moveForward, aiSpeed * dt);
+  }
+
+  // Collision detection and correction for player
+  function handleCollisions() {
     const carBox = new THREE.Box3().setFromObject(car);
     let collided = false;
     for (let wb of wallBoxes) {
       if (carBox.intersectsBox(wb)) {
         collided = true;
-        // simple correction: move car back along forwardVec until no intersection or small step
-        // step back proportional to velocity and dt
-        const pushBack = forwardVec.clone().multiplyScalar(-Math.max(0.05, Math.abs(velocity) * dt * 1.2));
-        car.position.add(pushBack);
-        // reduce speed strongly
-        velocity *= -0.15;
+        // push car back along its forward vector
+        const forward = new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading));
+        car.position.addScaledVector(forward, -Math.max(0.08, Math.abs(velocity) * 0.02));
+        velocity *= -0.18;
       }
     }
-
-    // Off-road (grass) penalty: if car x outside road half width + small margin
-    const distFromCenterX = Math.abs(car.position.x);
-    if (distFromCenterX > roadWidth/2) {
-      // on grass: strong drag
+    // off-road penalty (grass)
+    // compute distance from centerline by projecting to nearest centerline point
+    // approximate by checking distance to nearest centerline sample
+    let nearestDist = Infinity;
+    let nearestIdx = 0;
+    for (let i=0;i<centerline.length;i+=8){
+      const d = car.position.distanceTo(centerline[i]);
+      if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+    }
+    // if far from road center (approx), apply penalty
+    if (nearestDist > roadWidth/2 + 1.2) {
       velocity *= 0.96;
       statusEl.textContent = 'Status: On grass';
     } else if (!collided) {
       statusEl.textContent = 'Status: Racing';
     }
+  }
 
-    // Camera smoothing
-    const desiredCamPos = car.localToWorld(camOffset.clone());
-    camera.position.lerp(desiredCamPos, dt*4);
-    const lookAt = car.localToWorld(camLookOffset.clone());
-    camera.lookAt(lookAt);
-
-    // HUD speed
-    const kmh = Math.round(velocity * 3.6);
-    speedEl.textContent = `Speed: ${kmh} km/h`;
-
-    // Lap detection
-    const prevZ = lastZ;
-    lastZ = car.position.z;
-    if (prevZ < startZ && car.position.z >= startZ && Math.abs(car.position.x) < roadWidth/2) {
+  // Lap detection by tracking progress along centerline
+  function updateLap() {
+    // find nearest index on centerline to car
+    let nearest = 0;
+    let best = Infinity;
+    for (let i=0;i<centerline.length;i+=6){
+      const d = car.position.distanceTo(centerline[i]);
+      if (d < best) { best = d; nearest = i; }
+    }
+    // if we passed the start (wrap-around), count lap
+    if (nearest < lastIndexOnLine && lastIndexOnLine > centerline.length*0.8) {
       laps++;
       lapEl.textContent = `Lap: ${laps} / ${totalLaps}`;
       if (laps >= totalLaps) {
@@ -358,412 +479,36 @@
         setTimeout(()=> statusEl.textContent = 'Status: Racing', 1200);
       }
     }
-
-    // AI follow centerline
-    const target = centerline[aiIndex];
-    const aiDir = new THREE.Vector3(target.x - ai.position.x, 0, target.z - ai.position.z);
-    if (aiDir.length() < 1.2) {
-      aiIndex = (aiIndex + 1) % centerline.length;
-    } else {
-      aiDir.normalize();
-      ai.position.addScaledVector(aiDir, aiSpeed * dt);
-      ai.lookAt(ai.position.clone().add(aiDir));
-    }
-
-    renderer.render(scene, camera);
-    requestAnimationFrame(animate);
+    lastIndexOnLine = nearest;
   }
 
-  // initialize wall boxes (in case scene changed)
-  updateWallBoxes();
-
-  statusEl.textContent = 'Status: Racing';
-  animate();
-  </script>
-</body>
-</html>
-<!doctype html>
-<html lang="it">
-<head>
-  <meta charset="utf-8" />
-  <title>F1 Cittadina - Prototype (HTML/CSS/JS)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    html,body { height:100%; margin:0; background:#111; font-family:Arial,Helvetica,sans-serif; }
-    #container { width:100%; height:100%; display:block; position:relative; overflow:hidden; }
-    .ui {
-      position: absolute; left:12px; top:12px; color:#fff; z-index:10;
-      background:rgba(0,0,0,0.45); padding:10px 12px; border-radius:8px;
-      box-shadow:0 4px 12px rgba(0,0,0,0.6);
-    }
-    .ui h1 { margin:0 0 6px 0; font-size:14px; font-weight:700; letter-spacing:0.5px; }
-    .ui p { margin:4px 0; font-size:13px; }
-    .ui .big { font-size:18px; font-weight:700; color:#ffd700; }
-    .hint { position:absolute; right:12px; bottom:12px; color:#ddd; background:rgba(0,0,0,0.35); padding:8px 10px; border-radius:6px; font-size:12px; }
-  </style>
-</head>
-<body>
-  <div id="container"></div>
-
-  <div class="ui" id="hud">
-    <h1>F1 Cittadina Prototype</h1>
-    <p><span class="big" id="speed">Speed: 0 km/h</span></p>
-    <p id="lap">Lap: 0 / 3</p>
-    <p id="status">Status: Ready</p>
-  </div>
-
-  <div class="hint">Controls: W/S accelerate, A/D steer, Space brake</div>
-
-  <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
-
-  <script>
-  // ====== Setup scena, renderer, camera ======
-  const container = document.getElementById('container');
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x87ceeb);
-
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = true;
-  container.appendChild(renderer.domElement);
-
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
-  camera.position.set(0, 6, -14);
-
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.9);
-  hemi.position.set(0, 50, 0);
-  scene.add(hemi);
-
-  const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-  dir.position.set(-10, 20, 10);
-  dir.castShadow = true;
-  dir.shadow.mapSize.set(2048,2048);
-  scene.add(dir);
-
-  // ====== Ground and grass ======
-  const groundMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b });
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), groundMat);
-  ground.rotation.x = -Math.PI/2;
-  ground.receiveShadow = true;
-  scene.add(ground);
-
-  // grass around road
-  const grassMat = new THREE.MeshStandardMaterial({ color: 0x2e8b57, roughness:1 });
-  const grass = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), grassMat);
-  grass.rotation.x = -Math.PI/2;
-  grass.position.y = 0.001;
-  grass.receiveShadow = true;
-  scene.add(grass);
-
-  // ====== Road (street circuit) ======
-  const roadGroup = new THREE.Group();
-  scene.add(roadGroup);
-
-  const roadWidth = 8;      // narrower for city feel
-  const roadLength = 200;
-  const asphaltMat = new THREE.MeshStandardMaterial({ color: 0x2f2f2f, roughness: 0.95 });
-  const roadGeom = new THREE.PlaneGeometry(roadWidth, roadLength, 1, 1);
-  roadGeom.rotateX(-Math.PI/2);
-  const roadMesh = new THREE.Mesh(roadGeom, asphaltMat);
-  roadMesh.receiveShadow = true;
-  roadGroup.add(roadMesh);
-  roadMesh.position.set(0, 0.02, 0);
-
-  // lane markings (dashed center)
-  function addDashedCenter() {
-    const dashLen = 3, gap = 2;
-    const count = Math.ceil(roadLength / (dashLen + gap));
-    for (let i=0;i<count;i++){
-      const mat = new THREE.MeshStandardMaterial({ color: 0xffd24d, emissive:0xffd24d, emissiveIntensity:0.2 });
-      const g = new THREE.BoxGeometry(0.12, 0.02, dashLen);
-      const m = new THREE.Mesh(g, mat);
-      const zpos = -roadLength/2 + i*(dashLen+gap) + dashLen/2;
-      m.position.set(0, 0.03, zpos);
-      roadGroup.add(m);
-    }
-  }
-  addDashedCenter();
-
-  // sidewalks and buildings (simple boxes) to create city walls
-  const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x999999 });
-  function addSidewalk(x) {
-    const s = new THREE.Mesh(new THREE.BoxGeometry(2, 0.2, roadLength), sidewalkMat);
-    s.position.set(x, 0.1, 0);
-    s.receiveShadow = true;
-    s.castShadow = true;
-    roadGroup.add(s);
-  }
-  addSidewalk(-(roadWidth/2 + 1.1));
-  addSidewalk((roadWidth/2 + 1.1));
-
-  // buildings as visual walls (non-passable)
-  const buildingMat = new THREE.MeshStandardMaterial({ color: 0x666666, metalness:0.2, roughness:0.8 });
-  const walls = [];
-  function addBuildingWall(x, height, depthOffset=0) {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(1.6, height, roadLength + depthOffset), buildingMat);
-    b.position.set(x, height/2, 0);
-    b.castShadow = true;
-    b.receiveShadow = true;
-    scene.add(b);
-    walls.push(b);
-  }
-  // add walls close to road for tight city feel
-  addBuildingWall(-(roadWidth/2 + 3.2), 4, 20);
-  addBuildingWall((roadWidth/2 + 3.2), 4, 20);
-
-  // Add some decorative crates/boxes along sidewalks
-  const crateMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
-  for (let i= -90; i<=90; i+=12) {
-    const c = new THREE.Mesh(new THREE.BoxGeometry(1.2,0.8,1.2), crateMat);
-    c.position.set(-roadWidth/2 - 2.2, 0.4, i);
-    scene.add(c);
-    const c2 = c.clone();
-    c2.position.set(roadWidth/2 + 2.2, 0.4, i+4);
-    scene.add(c2);
-  }
-
-  // ====== Centerline path for AI and lap detection (simple loop) ======
-  const centerline = [];
-  // straight forward
-  for (let i=0;i<120;i++){
-    centerline.push(new THREE.Vector3(0, 0, -roadLength/2 + i * (roadLength/120)));
-  }
-  // tight city loop (semi-circle)
-  const loopRadius = 18;
-  const loopCenterZ = roadLength/2;
-  for (let i=0;i<64;i++){
-    const t = (i/63) * Math.PI;
-    const x = Math.cos(t) * loopRadius;
-    const z = loopCenterZ + Math.sin(t) * loopRadius;
-    centerline.push(new THREE.Vector3(x, 0, z));
-  }
-  // return straight
-  for (let i=0;i<120;i++){
-    centerline.push(new THREE.Vector3(0, 0, roadLength/2 - i * (roadLength/120)));
-  }
-
-  // ====== Player car ======
-  const car = new THREE.Group();
-  car.position.set(0, 0.5, -roadLength/2 + 6);
-  scene.add(car);
-
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x0055ff, metalness:0.3, roughness:0.4 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), bodyMat);
-  body.castShadow = true;
-  body.position.y = 0.4;
-  car.add(body);
-
-  const cockpit = new THREE.Mesh(new THREE.BoxGeometry(1.2,0.4,1.2), new THREE.MeshStandardMaterial({ color:0x111111 }));
-  cockpit.position.set(0,0.65,0.2);
-  cockpit.castShadow = true;
-  car.add(cockpit);
-
-  const wheelMat = new THREE.MeshStandardMaterial({ color:0x111111 });
-  function makeWheel(x,z){
-    const w = new THREE.Mesh(new THREE.CylinderGeometry(0.35,0.35,0.4,16), wheelMat);
-    w.rotation.z = Math.PI/2;
-    w.position.set(x,0.2,z);
-    w.castShadow = true;
-    car.add(w);
-    return w;
-  }
-  const wfl = makeWheel(-0.95,1.4);
-  const wfr = makeWheel(0.95,1.4);
-  const wrl = makeWheel(-0.95,-1.4);
-  const wrr = makeWheel(0.95,-1.4);
-
-  // ====== Camera follow ======
-  const camOffset = new THREE.Vector3(0, 4.2, -8);
-  const camLookOffset = new THREE.Vector3(0, 1.2, 0);
-
-  // ====== Driving physics (kinematic) ======
-  let velocity = 0;
-  let heading = 0;
-  let steerAngle = 0;
-  const maxSteer = THREE.MathUtils.degToRad(28);
-  const maxSpeed = 140;
-  const maxSpeedMs = maxSpeed / 3.6;
-  const accel = 26;
-  const brakeDecel = 60;
-  const drag = 1.8;
-  const grip = 6.0;
-
-  const input = { forward:false, back:false, left:false, right:false, brake:false };
-  window.addEventListener('keydown', (e)=>{
-    if (e.code === 'KeyW') input.forward = true;
-    if (e.code === 'KeyS') input.back = true;
-    if (e.code === 'KeyA') input.left = true;
-    if (e.code === 'KeyD') input.right = true;
-    if (e.code === 'Space') input.brake = true;
-  });
-  window.addEventListener('keyup', (e)=>{
-    if (e.code === 'KeyW') input.forward = false;
-    if (e.code === 'KeyS') input.back = false;
-    if (e.code === 'KeyA') input.left = false;
-    if (e.code === 'KeyD') input.right = false;
-    if (e.code === 'Space') input.brake = false;
-  });
-
-  const speedEl = document.getElementById('speed');
-  const lapEl = document.getElementById('lap');
-  const statusEl = document.getElementById('status');
-
-  // Lap detection
-  const startZ = car.position.z;
-  let laps = 0;
-  const totalLaps = 3;
-  let lastZ = car.position.z;
-
-  // AI car
-  const ai = new THREE.Group();
-  scene.add(ai);
-  const aiBody = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), new THREE.MeshStandardMaterial({ color:0xff5500 }));
-  aiBody.position.y = 0.4;
-  ai.add(aiBody);
-  ai.position.set(0,0.5, -roadLength/2 + 20);
-  let aiIndex = 0;
-  let aiSpeed = 10;
-
-  // Precompute wall bounding boxes
-  const wallBoxes = [];
-  function updateWallBoxes() {
-    wallBoxes.length = 0;
-    for (let w of walls) {
-      const box = new THREE.Box3().setFromObject(w);
-      wallBoxes.push(box);
-    }
-    // sidewalks as walls too (prevent driving on them)
-    roadGroup.children.forEach(child => {
-      if (child.geometry && child.geometry.type === 'BoxGeometry' && child.position.x !== 0) {
-        wallBoxes.push(new THREE.Box3().setFromObject(child));
-      }
-    });
-  }
-  updateWallBoxes();
-
-  // Resize handling
-  window.addEventListener('resize', ()=> {
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera.aspect = window.innerWidth/window.innerHeight;
-    camera.updateProjectionMatrix();
-  });
-
-  const clock = new THREE.Clock();
-
+  // Main loop
   function animate(){
     const dt = Math.min(0.05, clock.getDelta());
 
-    // Player input -> throttle/brake
-    let throttle = 0;
-    if (input.forward) throttle += 1;
-    if (input.back) throttle -= 0.6;
+    updatePlayer(dt);
+    handleCollisions();
+    updateAI(dt);
 
-    if (input.brake) {
-      if (velocity > 0) velocity -= brakeDecel * dt;
-      else velocity = Math.max(velocity - brakeDecel*dt, -maxSpeedMs*0.5);
-    } else {
-      velocity += throttle * accel * dt;
-      const dragForce = drag * velocity * Math.abs(velocity) * 0.02;
-      velocity -= dragForce * dt;
-    }
-
-    velocity = THREE.MathUtils.clamp(velocity, -maxSpeedMs*0.6, maxSpeedMs);
-
-    // steering
-    let steerInput = 0;
-    if (input.left) steerInput = 1;
-    if (input.right) steerInput = -1;
-    const speedFactor = 1 - Math.min(1, Math.abs(velocity)/maxSpeedMs);
-    steerAngle = THREE.MathUtils.lerp(steerAngle, steerInput * maxSteer * (0.6 + 0.4*speedFactor), dt*6);
-
-    // heading and movement
-    const turnRadius = 1.0 / Math.max(0.0001, Math.tan(steerAngle));
-    const angularVel = (velocity / Math.max(1, Math.abs(turnRadius))) * (steerAngle === 0 ? 0 : Math.sign(steerAngle));
-    heading += angularVel * dt * (grip * 0.02);
-
-    const forwardVec = new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading));
-    const prevPos = car.position.clone();
-    car.position.addScaledVector(forwardVec, velocity * dt);
-    car.rotation.y = heading;
-
-    // wheel spin visuals
-    const wheelSpin = velocity * dt * 6;
-    wfl.rotation.x -= wheelSpin;
-    wfr.rotation.x -= wheelSpin;
-    wrl.rotation.x -= wheelSpin;
-    wrr.rotation.x -= wheelSpin;
-
-    // Collision: car bounding box vs walls
-    const carBox = new THREE.Box3().setFromObject(car);
-    let collided = false;
-    for (let wb of wallBoxes) {
-      if (carBox.intersectsBox(wb)) {
-        collided = true;
-        // simple correction: move car back along forwardVec until no intersection or small step
-        // step back proportional to velocity and dt
-        const pushBack = forwardVec.clone().multiplyScalar(-Math.max(0.05, Math.abs(velocity) * dt * 1.2));
-        car.position.add(pushBack);
-        // reduce speed strongly
-        velocity *= -0.15;
-      }
-    }
-
-    // Off-road (grass) penalty: if car x outside road half width + small margin
-    const distFromCenterX = Math.abs(car.position.x);
-    if (distFromCenterX > roadWidth/2) {
-      // on grass: strong drag
-      velocity *= 0.96;
-      statusEl.textContent = 'Status: On grass';
-    } else if (!collided) {
-      statusEl.textContent = 'Status: Racing';
-    }
-
-    // Camera smoothing
+    // camera follow smoothing
     const desiredCamPos = car.localToWorld(camOffset.clone());
     camera.position.lerp(desiredCamPos, dt*4);
     const lookAt = car.localToWorld(camLookOffset.clone());
     camera.lookAt(lookAt);
 
-    // HUD speed
+    // HUD
     const kmh = Math.round(velocity * 3.6);
     speedEl.textContent = `Speed: ${kmh} km/h`;
 
-    // Lap detection
-    const prevZ = lastZ;
-    lastZ = car.position.z;
-    if (prevZ < startZ && car.position.z >= startZ && Math.abs(car.position.x) < roadWidth/2) {
-      laps++;
-      lapEl.textContent = `Lap: ${laps} / ${totalLaps}`;
-      if (laps >= totalLaps) {
-        statusEl.textContent = 'Status: Race Finished';
-        velocity = 0;
-      } else {
-        statusEl.textContent = `Status: Lap ${laps} completed`;
-        setTimeout(()=> statusEl.textContent = 'Status: Racing', 1200);
-      }
-    }
-
-    // AI follow centerline
-    const target = centerline[aiIndex];
-    const aiDir = new THREE.Vector3(target.x - ai.position.x, 0, target.z - ai.position.z);
-    if (aiDir.length() < 1.2) {
-      aiIndex = (aiIndex + 1) % centerline.length;
-    } else {
-      aiDir.normalize();
-      ai.position.addScaledVector(aiDir, aiSpeed * dt);
-      ai.lookAt(ai.position.clone().add(aiDir));
-    }
+    updateLap();
 
     renderer.render(scene, camera);
     requestAnimationFrame(animate);
   }
 
-  // initialize wall boxes (in case scene changed)
-  updateWallBoxes();
-
+  // initialize
   statusEl.textContent = 'Status: Racing';
   animate();
   </script>
 </body>
 </html>
-
