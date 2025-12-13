@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>Track Editor + Test - F1 Cittadina</title>
+<title>Track Editor + Test - F1 Cittadina (Controls & Camera)</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
@@ -37,7 +37,7 @@
   <p style="font-size:12px;margin:6px 0 0 0">Click to add points. Drag to move. Select point and press Delete to remove.</p>
 </div>
 
-<div class="hint">Controls: W/S or ArrowUp/Down accelerate/brake, A/D or ArrowLeft/Right steer</div>
+<div class="hint">Controls: W/S or ArrowUp/ArrowDown accelerate/brake, A/D or ArrowLeft/ArrowRight steer; Middle click to change camera</div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
 
@@ -122,7 +122,6 @@ function makePointMesh(pos) {
 }
 
 function clearTrack() {
-  // remove meshes
   for (let m of pointMeshes) scene.remove(m);
   pointMeshes.length = 0;
   points.length = 0;
@@ -142,15 +141,13 @@ renderer.domElement.addEventListener('pointerdown', (ev)=>{
   mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
   mouse.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(mouse, camera);
-  // intersect ground plane
   const intersect = new THREE.Vector3();
   raycaster.ray.intersectPlane(plane, intersect);
-  // check if clicked on existing point
   let found = false;
   for (let i=0;i<pointMeshes.length;i++){
     const m = pointMeshes[i];
     const dist = m.position.distanceTo(intersect);
-    if (dist < 1.2) { // select
+    if (dist < 1.2) {
       selectedPointIndex = i;
       dragging = true;
       dragIndex = i;
@@ -198,27 +195,22 @@ window.addEventListener('keydown', (e)=>{
 
 /* ====== Render spline and road in editor ====== */
 function renderEditor() {
-  // remove old
   if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
   if (roadMesh) { scene.remove(roadMesh); roadMesh = null; }
   for (let w of wallMeshes) scene.remove(w); wallMeshes.length=0;
   for (let d of centerDashes) scene.remove(d); centerDashes.length=0;
 
   if (points.length < 2) return;
-  // build CatmullRom closed if last equals first, else open
   const pts = points.map(p=>p.clone());
-  // ensure closed if near
   const closed = pts[0].distanceTo(pts[pts.length-1]) < 1.0;
   const curve = new THREE.CatmullRomCurve3(pts, closed, 'catmullrom', 0.5);
 
-  // line
   const linePts = curve.getPoints(Math.max(64, pts.length*12));
   const geom = new THREE.BufferGeometry().setFromPoints(linePts);
   const line = new THREE.Line(geom, lineMaterial);
   splineMesh = line;
   scene.add(line);
 
-  // road mesh
   const width = parseFloat(roadWidthInput.value) || 7.2;
   const roadGeom = buildRoad(curve, width, 400);
   const roadMat = new THREE.MeshStandardMaterial({color:0x2f2f2f});
@@ -226,16 +218,14 @@ function renderEditor() {
   roadMesh.receiveShadow = true;
   scene.add(roadMesh);
 
-  // walls
   const wallH = parseFloat(wallHeightInput.value) || 2.0;
   addWallsAlongCurve(curve, width/2 + 1.2, wallH, 1.0);
   addWallsAlongCurve(curve, -(width/2 + 1.2), wallH, 1.0);
 
-  // center dashes
   addCenterDashes(curve);
 }
 
-/* Road builder reused from earlier examples */
+/* Road builder reused */
 function buildRoad(curve, width, segments) {
   const geometry = new THREE.BufferGeometry();
   const positions = [];
@@ -362,9 +352,7 @@ function enterTestMode() {
   if (points.length < 2) { alert('Disegna almeno 2 punti per il tracciato'); return; }
   mode = 'test';
   btnTest.disabled = true; btnEdit.disabled = false;
-  // hide editor point meshes and UI interactions
   for (let m of pointMeshes) m.visible = false;
-  // build final curve and centerline samples
   const pts = points.map(p=>p.clone());
   const closed = pts[0].distanceTo(pts[pts.length-1]) < 1.0;
   const curve = new THREE.CatmullRomCurve3(pts, closed, 'catmullrom', 0.5);
@@ -375,32 +363,24 @@ function enterTestMode() {
     const p = curve.getPointAt(t);
     centerline.push(new THREE.Vector3(p.x,0,p.z));
   }
-  // compute wall boxes
   wallBoxes = wallMeshes.map(w => new THREE.Box3().setFromObject(w));
-  // spawn player and ai
   spawnVehicles(curve);
-  // reposition camera will be handled in animate
 }
 
 function enterEditMode() {
   mode = 'edit';
   btnTest.disabled = false; btnEdit.disabled = true;
-  // remove vehicles
   if (player) { scene.remove(player); player = null; }
   if (ai) { scene.remove(ai); ai = null; }
-  // show points
   for (let m of pointMeshes) m.visible = true;
-  // reset camera to overview
   camera.position.set(0,60,120); camera.lookAt(0,0,0);
 }
 
 /* spawn player and ai on curve */
 function spawnVehicles(curve) {
-  // remove previous
   if (player) scene.remove(player);
   if (ai) scene.remove(ai);
 
-  // player
   player = new THREE.Group();
   const startT = 0.02;
   const startP = curve.getPointAt(startT);
@@ -409,10 +389,8 @@ function spawnVehicles(curve) {
   player.rotation.y = Math.atan2(startTan.x, startTan.z);
   const body = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), new THREE.MeshStandardMaterial({color:0x0055ff}));
   body.position.y = 0.4; player.add(body);
-  // wheels simple
   scene.add(player);
 
-  // ai
   ai = new THREE.Group();
   const aiT = (startT + 0.85) % 1.0;
   const aiP = curve.getPointAt(aiT);
@@ -423,17 +401,26 @@ function spawnVehicles(curve) {
   aiBody.position.y = 0.4; ai.add(aiBody);
   scene.add(ai);
 
-  // initialize states
   playerState = {velocity:0, heading:player.rotation.y, steerAngle:0};
   aiState = {speed:6, index: Math.floor(centerline.length*0.85)};
 
-  // set camera near hood
-  camera.position.copy(player.localToWorld(new THREE.Vector3(0,1.05,2.2)));
-  camera.lookAt(player.localToWorld(new THREE.Vector3(0,0.6,12)));
+  // camera initial mode
+  cameraMode = 'hood'; // 'hood' | 'third' | 'top'
+  applyCameraModeImmediate();
 }
 
-/* ====== Driving physics and AI (simplified) ====== */
+/* ====== Controls mapping and camera modes ====== */
+
+/* Input state */
 const input = {forward:false,back:false,left:false,right:false,brake:false};
+
+/* KEY MAPPING FIXES:
+   - W / ArrowUp => forward
+   - S / ArrowDown => back
+   - A / ArrowLeft => steer LEFT
+   - D / ArrowRight => steer RIGHT
+   This mapping ensures A = left, D = right (not inverted).
+*/
 window.addEventListener('keydown', (e)=>{
   if (mode !== 'test') return;
   if (e.code === 'KeyW' || e.code === 'ArrowUp') input.forward = true;
@@ -451,6 +438,65 @@ window.addEventListener('keyup', (e)=>{
   if (e.code === 'Space') input.brake = false;
 });
 
+/* Camera modes: hood, third, top. Middle click cycles modes */
+let cameraMode = 'hood';
+const hoodOffset = new THREE.Vector3(0,1.05,2.2);
+const hoodLook = new THREE.Vector3(0,0.6,12);
+const thirdOffset = new THREE.Vector3(0,3.6,-8.5);
+const thirdLook = new THREE.Vector3(0,1.2,12);
+const topOffset = new THREE.Vector3(0, 40, 0);
+const topLook = new THREE.Vector3(0,0,0);
+
+function applyCameraModeImmediate() {
+  if (!player) return;
+  if (cameraMode === 'hood') {
+    camera.position.copy(player.localToWorld(hoodOffset.clone()));
+    camera.lookAt(player.localToWorld(hoodLook.clone()));
+  } else if (cameraMode === 'third') {
+    camera.position.copy(player.localToWorld(thirdOffset.clone()));
+    camera.lookAt(player.localToWorld(thirdLook.clone()));
+  } else if (cameraMode === 'top') {
+    // top-down centered on player
+    const topPos = player.position.clone().add(new THREE.Vector3(0,40,0));
+    camera.position.copy(topPos);
+    camera.lookAt(player.position.clone().add(new THREE.Vector3(0,0,0)));
+  }
+}
+
+// cycle camera on middle click (mouse wheel)
+renderer.domElement.addEventListener('mousedown', (e)=>{
+  if (mode !== 'test') return;
+  if (e.button === 1) { // middle button
+    // cycle
+    if (cameraMode === 'hood') cameraMode = 'third';
+    else if (cameraMode === 'third') cameraMode = 'top';
+    else cameraMode = 'hood';
+    // immediate apply for snappy feedback
+    applyCameraModeImmediate();
+  }
+});
+
+/* Smooth camera interpolation each frame */
+function updateCameraSmooth(dt) {
+  if (!player) return;
+  if (cameraMode === 'hood') {
+    const desired = player.localToWorld(hoodOffset.clone());
+    camera.position.lerp(desired, dt*8);
+    const look = player.localToWorld(hoodLook.clone());
+    camera.lookAt(look);
+  } else if (cameraMode === 'third') {
+    const desired = player.localToWorld(thirdOffset.clone());
+    camera.position.lerp(desired, dt*6);
+    const look = player.localToWorld(thirdLook.clone());
+    camera.lookAt(look);
+  } else if (cameraMode === 'top') {
+    const desired = player.position.clone().add(new THREE.Vector3(0,40,0));
+    camera.position.lerp(desired, dt*4);
+    camera.lookAt(player.position.clone());
+  }
+}
+
+/* ====== Physics: player and AI ====== */
 function updatePlayerPhysics(dt) {
   if (!playerState) return;
   const maxSteer = THREE.MathUtils.degToRad(28);
@@ -458,10 +504,12 @@ function updatePlayerPhysics(dt) {
   const maxSpeedMs = 160/3.6;
   const accel = 28, brakeDecel = 80, drag = 1.8;
 
-  // throttle
+  // throttle: prefer exclusive forward/back handling to avoid inversion when both pressed
   let throttle = 0;
-  if (input.forward) throttle += 1;
-  if (input.back) throttle -= 0.6;
+  if (input.forward && !input.back) throttle = 1;
+  else if (input.back && !input.forward) throttle = -0.6;
+  else throttle = 0;
+
   if (input.brake) {
     if (playerState.velocity > 0) playerState.velocity -= brakeDecel * dt;
     else playerState.velocity = Math.max(playerState.velocity - brakeDecel*dt, -maxSpeedMs*0.5);
@@ -472,11 +520,13 @@ function updatePlayerPhysics(dt) {
   }
   playerState.velocity = THREE.MathUtils.clamp(playerState.velocity, -maxSpeedMs*0.6, maxSpeedMs);
 
-  // steering
+  // steering: A = left, D = right (left => positive steerInput)
   let steerInput = 0;
-  if (input.left) steerInput = -1;
-  if (input.right) steerInput = 1;
-  const speedFactor = 1 - Math.min(1, Math.abs(playerState.velocity)/maxSpeedMs);
+  if (input.left && !input.right) steerInput = 1;   // left
+  else if (input.right && !input.left) steerInput = -1; // right
+  else steerInput = 0;
+
+  const speedFactor = 1 - Math.min(1, Math.abs(playerState.velocity) / maxSpeedMs);
   const targetSteer = steerInput * maxSteer * (0.6 + 0.4*speedFactor);
   playerState.steerAngle = THREE.MathUtils.lerp(playerState.steerAngle || 0, targetSteer, dt*8);
 
@@ -493,7 +543,6 @@ function updatePlayerPhysics(dt) {
   const carBox = new THREE.Box3().setFromObject(player);
   for (let wb of wallBoxes) {
     if (carBox.intersectsBox(wb)) {
-      // push back
       player.position.addScaledVector(forward, -Math.max(0.08, Math.abs(playerState.velocity)*0.02));
       playerState.velocity *= -0.18;
     }
@@ -502,8 +551,7 @@ function updatePlayerPhysics(dt) {
 
 function updateAIPhysics(dt) {
   if (!aiState) return;
-  // pure pursuit: lookahead index
-  const lookahead = 18;
+  const lookahead = 22;
   let idx = aiState.index;
   const targetIdx = (idx + lookahead) % centerline.length;
   const target = centerline[targetIdx];
@@ -513,10 +561,8 @@ function updateAIPhysics(dt) {
 
   const desiredDir = toTarget.clone().normalize();
   const desiredYaw = Math.atan2(desiredDir.x, desiredDir.z);
-  const yawDiff = Math.atan2(Math.sin(desiredYaw - ai.rotation.y), Math.cos(desiredYaw - ai.rotation.y));
-  ai.rotation.y += THREE.MathUtils.clamp(yawDiff, -dt*3.0, dt*3.0);
+  let yawDiff = Math.atan2(Math.sin(desiredYaw - ai.rotation.y), Math.cos(desiredYaw - ai.rotation.y));
 
-  // speed control: simple curvature estimate
   const nextIdx = (targetIdx + 8) % centerline.length;
   const nextPoint = centerline[nextIdx];
   const futureDir = new THREE.Vector3(nextPoint.x - target.x, 0, nextPoint.z - target.z).normalize();
@@ -528,15 +574,29 @@ function updateAIPhysics(dt) {
   else aiState.speed -= 12 * dt;
   aiState.speed = THREE.MathUtils.clamp(aiState.speed, 6, 14);
 
-  // move forward
-  const forward = new THREE.Vector3(Math.sin(ai.rotation.y),0,Math.cos(ai.rotation.y));
-  ai.position.addScaledVector(forward, aiState.speed * dt);
-
-  // wall avoidance simple
+  let avoid = false;
   const aiBox = new THREE.Box3().setFromObject(ai);
   for (let wb of wallBoxes) {
     const expanded = wb.clone().expandByScalar(1.6);
-    if (aiBox.intersectsBox(expanded)) {
+    if (aiBox.intersectsBox(expanded)) { avoid = true; break; }
+  }
+  if (avoid) {
+    aiState.speed *= 0.55;
+    yawDiff += (Math.random()>0.5?1:-1)*0.6;
+  }
+
+  const maxYawRate = dt * 3.0;
+  yawDiff = THREE.MathUtils.clamp(yawDiff, -maxYawRate, maxYawRate);
+  ai.rotation.y += yawDiff;
+
+  const forward = new THREE.Vector3(Math.sin(ai.rotation.y),0,Math.cos(ai.rotation.y));
+  ai.position.addScaledVector(forward, aiState.speed * dt);
+
+  // simple wall reaction
+  for (let wb of wallBoxes) {
+    const expanded = wb.clone().expandByScalar(1.2);
+    const aiBox2 = new THREE.Box3().setFromObject(ai);
+    if (aiBox2.intersectsBox(expanded)) {
       ai.position.addScaledVector(forward, -0.5);
       aiState.speed *= 0.6;
       ai.rotation.y += (Math.random()>0.5?1:-1)*0.4;
@@ -549,16 +609,11 @@ const clock = new THREE.Clock();
 function animate(){
   const dt = Math.min(0.05, clock.getDelta());
   if (mode === 'edit') {
-    // simple orbit-like camera for editing
     renderer.render(scene, camera);
   } else {
     updatePlayerPhysics(dt);
     updateAIPhysics(dt);
-    // camera on hood
-    const camPos = player.localToWorld(new THREE.Vector3(0,1.05,2.2));
-    camera.position.lerp(camPos, dt*8);
-    const lookAt = player.localToWorld(new THREE.Vector3(0,0.6,12));
-    camera.lookAt(lookAt);
+    updateCameraSmooth(dt);
     renderer.render(scene, camera);
   }
   requestAnimationFrame(animate);
@@ -577,7 +632,6 @@ function download(filename, text) {
 
 /* ====== Initialize editor with a sample Monaco-like layout ====== */
 (function seedSample(){
-  // sample control points to start with
   const sample = [
     {x:0,z:-220},{x:0,z:-160},{x:12,z:-130},{x:28,z:-100},{x:36,z:-60},
     {x:30,z:-20},{x:18,z:10},{x:6,z:36},{x:-6,z:60},{x:-28,z:80},
