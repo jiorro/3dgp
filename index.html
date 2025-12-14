@@ -791,39 +791,44 @@ function animate(){
     updatePlayerPhysics(dt);
     updateAIPhysics(dt);
 
-    if (!player) {
-// --- Camera follow senza rotazione (incolla qui) ---
-{
-  // parametri follow (in coordinate mondiali)
-  const followHeight = 6;   // altezza sopra la macchina
-  const followDist  = 10;   // distanza dietro in asse Z mondo (positivo = verso +Z)
+// --- Camera follow: segue il player e guarda sempre verso di lui, ma resta orizzontale ---
+if (player) {
+  camera.up.set(0,1,0);
 
-  // posizione desiderata: sempre dietro rispetto all'asse Z del mondo,
-  // non rispetto all'heading dell'auto (quindi la camera non ruota)
-  const desired = new THREE.Vector3(
-    player.position.x,
-    player.position.y + Math.abs(followHeight),
-    player.position.z + Math.abs(followDist) // usa + o - a seconda di dove vuoi che stia la camera rispetto all'asse Z
-  );
+  // parametri
+  const followHeight = 6;   // altezza sopra il player
+  const followDist  = 10;   // distanza dietro rispetto all'heading del player
 
-  // evita che la camera passi dentro la macchina
+  // forward basato sull'heading stabile (playerState.heading) se disponibile
+  const heading = (playerState && typeof playerState.heading === 'number') ? playerState.heading : player.rotation.y;
+  const forward = new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading)).normalize();
+
+  // posizione desiderata: dietro il player lungo il suo forward, ad altezza fissa
+  const desired = player.position.clone()
+    .addScaledVector(forward, -Math.abs(followDist))
+    .setY(player.position.y + Math.abs(followHeight));
+
+  // evita che la camera passi attraverso il player
   const minDistance = 0.6;
   if (camera.position.distanceTo(desired) < minDistance) {
-    // sposta leggermente indietro lungo Z mondo
-    desired.z += (desired.z >= player.position.z) ? 0.2 : -0.2;
+    desired.addScaledVector(forward, -0.2);
   }
 
-  // interpolazione morbida della posizione
-  const t = Math.min(1, dt * 3.0);
+  // interpolazione morbida
+  const t = Math.min(1, dt * 6.0);
   camera.position.lerp(desired, t);
 
-  // BLOCCA la rotazione: imposta angoli fissi e non chiamare lookAt
-  // Qui la camera guarda orizzontalmente verso -Z mondo (y=0 = orizzontale)
-  // Se vuoi che guardi leggermente verso il basso, modifica rotation.x (negativo = guarda in basso)
-  camera.rotation.set(0, 0, 0); // (rotX, rotY, rotZ) in radianti
+  // guarda il player ma alla stessa altezza della camera (nessun pitch)
+  const lookTarget = player.position.clone();
+  lookTarget.y = camera.position.y;
 
-  // rimuovi qualsiasi camera.lookAt(...) in questo ramo per evitare override
-  camera.up.set(0,1,0);
+  // protezione contro coincidenza esatta
+  if (camera.position.distanceTo(lookTarget) < 0.001) lookTarget.z += 0.001;
+
+  camera.lookAt(lookTarget);
+
+  // rimuove qualsiasi roll residuo
+  camera.rotation.z = 0;
 }
 
 
