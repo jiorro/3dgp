@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>3D Track Editor - Camera Behind Player Fixed</title>
+<title>3D Track Editor - Fixed Horizontal Camera</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
@@ -62,9 +62,12 @@
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
 <script>
-/* Full working example: camera stays horizontal and is always behind the car relative to its heading.
-   Key fix: compute a BACKWARD vector from heading and place camera at player + backward * dist,
-   then lookAt the player's position (but with camera's Y to avoid pitch). */
+/* Full single-file solution:
+   - camera always placed behind the car relative to its heading (uses BACKWARD vector)
+   - camera remains horizontal (no pitch/roll), looks at the car horizontally
+   - player is visible and controllable with W/S/A/D and arrow keys
+   - robust road generation and editor/test modes
+*/
 
 const container = document.getElementById('container');
 const scene = new THREE.Scene();
@@ -314,7 +317,7 @@ renderer.domElement.addEventListener('wheel', (e)=>{
   }
 }, {passive:false});
 
-/* renderEditor (keeps road generation) */
+/* renderEditor */
 function renderEditor() {
   try {
     if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
@@ -765,4 +768,3 @@ function placeManualEntity(type, worldPos) {
 </script>
 </body>
 </html>
-
