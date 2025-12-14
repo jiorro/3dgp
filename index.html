@@ -788,56 +788,74 @@ function updateAIPhysics(dt) {
 
 const clock = new THREE.Clock();
 function animate(){
+// unica dichiarazione clock (metti questa una sola volta nel file)
+const clock = new THREE.Clock();
+
+function animate(){
   const dt = Math.min(0.05, clock.getDelta());
 
   if (mode === 'edit') {
+    // editor: camera top-down fissa
+    camera.position.set(0, editorHeight, 0);
+    camera.up.set(0,1,0);
+    camera.lookAt(0,0,0);
     renderer.render(scene, camera);
   } else {
-    // aggiorna fisica
+    // test mode: aggiorna fisica
     updatePlayerPhysics(dt);
     updateAIPhysics(dt);
 
-    // camera follow stabile e senza inversioni
-    if (player) {
-      // garantisce up verticale
+    // fallback: se player non esiste, mantieni una camera di sicurezza sopra l'origine
+    if (!player) {
+      camera.position.lerp(new THREE.Vector3(0, Math.max(20, editorHeight/2), 0), Math.min(1, dt*3));
       camera.up.set(0,1,0);
-
-      // parametri follow: altezza sopra la macchina e distanza dietro
-      const followHeight = 6;   // altezza della camera rispetto alla macchina
-      const followDist  = 10;   // distanza dietro la macchina
-
-      // vettore forward della macchina (direzione in cui guarda)
-      const forward = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y)).normalize();
-
-      // posizione desiderata: dietro la macchina lungo forward, e ad altezza fissa
-      const desired = player.position.clone()
-        .addScaledVector(forward, -Math.abs(followDist)) // sempre dietro
-        .setY(player.position.y + Math.abs(followHeight)); // altezza sopra la macchina
-
-      // interpolazione morbida per evitare scatti
-      const t = Math.min(1, dt * 3.0);
-      camera.position.lerp(desired, t);
-
-      // punto da guardare: centro macchina ad altezza leggermente inferiore alla camera
-      const lookTarget = player.position.clone();
-      lookTarget.y = player.position.y + Math.min(followHeight * 0.6, camera.position.y - 0.5);
-
-      // evita che lookTarget e camera coincidano esattamente
-      if (camera.position.distanceTo(lookTarget) < 0.001) {
-        lookTarget.z += 0.001;
-      }
-
-      camera.lookAt(lookTarget);
-
-      // assicura che non ci sia roll residuo
-      camera.rotation.z = 0;
+      camera.lookAt(0,0,0);
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+      return;
     }
+
+    // camera follow stabile e senza inversioni
+    camera.up.set(0,1,0);
+
+    const followHeight = 6;   // altezza sopra la macchina
+    const followDist  = 10;   // distanza dietro la macchina
+
+    // forward vettore XZ
+    const forward = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y)).normalize();
+
+    // posizione desiderata: sempre dietro e ad altezza fissa
+    const desired = player.position.clone()
+      .addScaledVector(forward, -Math.abs(followDist))
+      .setY(player.position.y + Math.abs(followHeight));
+
+    // evita che desired coincida con la posizione della camera (minDistance)
+    const minDistance = 0.5;
+    if (camera.position.distanceTo(desired) < minDistance) {
+      // sposta leggermente indietro per evitare passaggi attraverso il player
+      desired.addScaledVector(forward, -0.1);
+    }
+
+    // lerp morbido
+    const t = Math.min(1, dt * 3.0);
+    camera.position.lerp(desired, t);
+
+    // look target: stessa altezza della camera meno un piccolo offset per mantenere orizzontalità
+    const lookTarget = player.position.clone();
+    lookTarget.y = camera.position.y - Math.max(1.0, followHeight * 0.4);
+
+    // protezione contro coincidenza esatta
+    if (camera.position.distanceTo(lookTarget) < 0.001) lookTarget.z += 0.001;
+
+    camera.lookAt(lookTarget);
+    camera.rotation.z = 0;
 
     renderer.render(scene, camera);
   }
 
   requestAnimationFrame(animate);
 }
+
 
 
     // camera follow stabile e orizzontale in Test
