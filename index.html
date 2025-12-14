@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>3D Track Editor - Fixed Horizontal Camera</title>
+<title>3D Track Editor - Camera Fixed Orientation</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
@@ -58,16 +58,12 @@
 
 <div id="speedHud" class="speed">Speed: 0 km/h</div>
 <div id="modeBadge" class="modeBadge">Editor</div>
-<div class="hint">Controls: W/S accelerate/brake, A/D steer or arrows; camera stays horizontal and follows behind the car</div>
+<div class="hint">Controls: W/S accelerate/brake, A/D steer or arrows; camera stays fixed in orientation and follows the car position</div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
 <script>
-/* Full single-file solution:
-   - camera always placed behind the car relative to its heading (uses BACKWARD vector)
-   - camera remains horizontal (no pitch/roll), looks at the car horizontally
-   - player is visible and controllable with W/S/A/D and arrow keys
-   - robust road generation and editor/test modes
-*/
+/* Single-file: camera follows player position but keeps a fixed orientation (never rotates).
+   Key: DO NOT call camera.lookAt in test mode; set camera.rotation to fixed values and only translate camera.position. */
 
 const container = document.getElementById('container');
 const scene = new THREE.Scene();
@@ -81,9 +77,13 @@ container.appendChild(renderer.domElement);
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
 camera.up.set(0,1,0);
 
+// FIXED camera orientation: slight tilt down, yaw fixed to 0, no roll
+// This orientation will never change during the test mode.
+const FIXED_CAMERA_ROTATION = { x: -0.15, y: 0, z: 0 }; // radians
+
 let editorHeight = 120;
 camera.position.set(0, editorHeight, 0);
-camera.lookAt(0,0,0);
+camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
 
 const hemi = new THREE.HemisphereLight(0xffffff,0x444444,0.9); hemi.position.set(0,50,0); scene.add(hemi);
 const dir = new THREE.DirectionalLight(0xffffff,0.8); dir.position.set(-10,20,10); dir.castShadow=true; scene.add(dir);
@@ -357,6 +357,8 @@ function renderEditor() {
       camera.position.set(0, editorHeight, 0);
       camera.lookAt(0,0,0);
       camera.up.set(0,1,0);
+      // keep fixed rotation even in editor view after repositioning
+      camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
     }
   } catch (err) {
     console.error('renderEditor error', err);
@@ -514,6 +516,8 @@ function enterTestMode() {
   manualEntities.forEach(e => wallBoxes.push(new THREE.Box3().setFromObject(e.mesh)));
   spawnVehicles(curve);
   camera.up.set(0,1,0);
+  // ensure camera rotation stays fixed when entering test
+  camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
   speedHud.style.display = 'block';
   modeBadge.textContent = 'Test';
 }
@@ -526,7 +530,7 @@ function enterEditMode() {
   modeBadge.textContent = 'Editor';
   camera.up.set(0,1,0);
   camera.position.set(0, editorHeight, 0);
-  camera.lookAt(0,0,0);
+  camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
 }
 function spawnVehicles(curve) {
   if (player) scene.remove(player);
@@ -663,7 +667,7 @@ function updateAIPhysics(dt) {
   ai.position.y = 0.5;
 }
 
-/* Animation: camera placed BEHIND the car using BACKWARD vector, looks at player but stays horizontal */
+/* Animation: camera TRANSLATES to follow player but KEEPS FIXED ORIENTATION */
 const clock = new THREE.Clock();
 function animate(){
   const dt = Math.min(0.05, clock.getDelta());
@@ -671,7 +675,7 @@ function animate(){
   if (mode === 'edit') {
     camera.position.set(0, editorHeight, 0);
     camera.up.set(0,1,0);
-    camera.lookAt(0,0,0);
+    camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
     renderer.render(scene, camera);
   } else {
     updatePlayerPhysics(dt);
@@ -680,46 +684,38 @@ function animate(){
     if (!player) {
       camera.position.lerp(new THREE.Vector3(0, Math.max(20, editorHeight/2), 0), Math.min(1, dt*3));
       camera.up.set(0,1,0);
-      camera.lookAt(0,0,0);
+      camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
       renderer.render(scene, camera);
       requestAnimationFrame(animate);
       return;
     }
 
-    // --- KEY: compute BACKWARD vector from heading and place camera behind the car ---
-    camera.up.set(0,1,0);
-    const followHeight = 6;   // vertical offset
-    const followDist = 10;    // distance behind the car
+    // --- CAMERA: translate to follow player's position but DO NOT change rotation ---
+    // Choose offsets in world coordinates (camera will remain oriented as FIXED_CAMERA_ROTATION)
+    const followHeight = 6;    // vertical offset above player
+    const followOffsetZ = -10; // world Z offset (negative = camera behind along -Z)
 
-    // stable heading from playerState
-    const heading = (playerState && typeof playerState.heading === 'number') ? playerState.heading : player.rotation.y;
+    // desired camera position in world coordinates (follows player's X and Z)
+    const desired = new THREE.Vector3(
+      player.position.x,
+      player.position.y + Math.abs(followHeight),
+      player.position.z + followOffsetZ
+    );
 
-    // BACKWARD vector (points from car toward camera when camera is behind)
-    const backward = new THREE.Vector3(-Math.sin(heading), 0, -Math.cos(heading)).normalize();
-
-    // desired camera position = player position + backward * followDist, at fixed height
-    const desired = player.position.clone().addScaledVector(backward, Math.abs(followDist));
-    desired.y = player.position.y + Math.abs(followHeight);
-
-    // avoid camera crossing through the player
-    const minDistance = 0.6;
+    // avoid camera getting too close
+    const minDistance = 0.5;
     if (camera.position.distanceTo(desired) < minDistance) {
-      desired.addScaledVector(backward, 0.2);
+      desired.z += (desired.z >= player.position.z) ? 0.2 : -0.2;
     }
 
-    // smooth movement
+    // smooth translation
     const t = Math.min(1, dt * 6.0);
     camera.position.lerp(desired, t);
 
-    // look target: player's position but at camera's Y to keep camera horizontal (no pitch)
-    const lookTarget = player.position.clone();
-    lookTarget.y = camera.position.y;
-
-    // ensure lookAt points to the player (not opposite)
-    camera.lookAt(lookTarget);
-
-    // remove any roll
-    camera.rotation.z = 0;
+    // IMPORTANT: do NOT call camera.lookAt here and do NOT change camera.rotation.
+    // Keep the fixed orientation defined at the top.
+    camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
+    camera.up.set(0,1,0);
 
     renderer.render(scene, camera);
   }
@@ -750,8 +746,8 @@ function setPlaceMode(m) {
 }
 
 /* small helpers for editor zoom */
-function editorZoomIn(){ editorHeight = Math.max(20, editorHeight - 8); camera.position.set(0, editorHeight, 0); camera.lookAt(0,0,0); }
-function editorZoomOut(){ editorHeight = Math.min(800, editorHeight + 8); camera.position.set(0, editorHeight, 0); camera.lookAt(0,0,0); }
+function editorZoomIn(){ editorHeight = Math.max(20, editorHeight - 8); camera.position.set(0, editorHeight, 0); camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z); }
+function editorZoomOut(){ editorHeight = Math.min(800, editorHeight + 8); camera.position.set(0, editorHeight, 0); camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z); }
 
 /* manual entities helper */
 function placeManualEntity(type, worldPos) {
