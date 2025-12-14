@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>3D Track Editor - Camera Follow Horizontal</title>
+<title>3D Track Editor - Camera Behind Player Fixed</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
@@ -23,7 +23,6 @@
 
 <div class="panel" id="ui">
   <h3>Track Editor</h3>
-
   <div class="row">
     <button id="btnClear">Clear</button>
     <button id="btnSave">Save</button>
@@ -31,18 +30,15 @@
     <button id="btnDownload">Download JSON</button>
     <input type="file" id="fileInput" accept=".json">
   </div>
-
   <div style="margin-top:6px" class="row">
     <label>Road Width <input id="roadWidth" type="number" value="7.2" step="0.2" style="width:80px"></label>
     <label>Wall Height <input id="wallHeight" type="number" value="2.0" step="0.1" style="width:80px"></label>
     <label>Wall Gap <input id="wallGap" type="number" value="1.2" step="0.1" style="width:80px"></label>
   </div>
-
   <div style="margin-top:6px" class="row">
     <label><input type="checkbox" id="autoWalls" checked> Auto Walls</label>
     <label><input type="checkbox" id="showRoad" checked> Show Road</label>
   </div>
-
   <div style="margin-top:6px" class="row">
     <button id="modePlaceWalls">Place Manual Walls</button>
     <button id="modePlaceBillboards">Place Billboards</button>
@@ -51,31 +47,25 @@
     <button id="btnTest">Test Track</button>
     <button id="btnEdit" disabled>Edit Track</button>
   </div>
-
   <div style="margin-top:8px" class="row">
     <strong>Editor Zoom</strong>
     <button id="zoomIn">+</button>
     <button id="zoomOut">−</button>
     <span class="small">o usa rotella / tasti + -</span>
   </div>
-
   <p class="small" style="margin-top:8px">Click per aggiungere punti; trascina per spostare; seleziona punto e premi Delete per rimuovere. Premi V per nascondere/mostrare il pannello.</p>
 </div>
 
 <div id="speedHud" class="speed">Speed: 0 km/h</div>
 <div id="modeBadge" class="modeBadge">Editor</div>
-<div class="hint">Controls: W/S accelerate/brake, A/D steer; Editor top-down; Test camera follows car horizontally</div>
+<div class="hint">Controls: W/S accelerate/brake, A/D steer or arrows; camera stays horizontal and follows behind the car</div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
-
 <script>
-/* Full working example:
-   - camera follows the player position and always stays horizontal (no pitch/roll)
-   - player is visible and controllable with W/S/A/D or arrows
-   - editor/test modes, road generation and sample track included
-*/
+/* Full working example: camera stays horizontal and is always behind the car relative to its heading.
+   Key fix: compute a BACKWARD vector from heading and place camera at player + backward * dist,
+   then lookAt the player's position (but with camera's Y to avoid pitch). */
 
-/* Scene setup */
 const container = document.getElementById('container');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
@@ -100,23 +90,7 @@ ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
 const grass = new THREE.Mesh(new THREE.PlaneGeometry(2000,2000), new THREE.MeshStandardMaterial({color:0x2e8b57}));
 grass.rotation.x = -Math.PI/2; grass.position.y = 0.001; scene.add(grass);
 
-/* State and UI refs */
-let mode = 'edit'; // 'edit' | 'test'
-const points = [];
-const pointMeshes = [];
-let selectedPointIndex = -1;
-let splineMesh = null;
-let roadMesh = null;
-let centerDashes = [];
-const manualEntities = [];
-let autoWallGroup = new THREE.Group(); scene.add(autoWallGroup);
-
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-let dragging = false;
-let dragIndex = -1;
-const plane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
-
+/* UI refs */
 const btnClear = document.getElementById('btnClear');
 const btnSave = document.getElementById('btnSave');
 const btnLoad = document.getElementById('btnLoad');
@@ -154,25 +128,43 @@ modeSetSpawn.onclick = ()=> setPlaceMode('setSpawn');
 zoomInBtn.addEventListener('click', editorZoomIn);
 zoomOutBtn.addEventListener('click', editorZoomOut);
 
-/* Materials */
-const roadMaterial = new THREE.MeshStandardMaterial({
-  color: 0x555555,
-  metalness: 0.05,
-  roughness: 0.85,
-  side: THREE.DoubleSide
-});
-const dashMaterial = new THREE.MeshStandardMaterial({color:0xffd24d});
+/* state */
+let mode = 'edit';
+const points = [];
+const pointMeshes = [];
+let selectedPointIndex = -1;
+let splineMesh = null;
+let roadMesh = null;
+let centerDashes = [];
+const manualEntities = [];
+let autoWallGroup = new THREE.Group(); scene.add(autoWallGroup);
 
-/* Helpers: points & meshes */
-function addPointAt(x,z) {
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let dragging = false;
+let dragIndex = -1;
+const plane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
+
+let placeMode = 'none';
+let spawnT = 0.02;
+let spawnPoint = null;
+
+/* player/ai */
+let player, ai, playerState, aiState, centerline = [], wallBoxes = [];
+const TUNING = { accel:11.0, brakeDecel:90.0, drag:1.2, maxSpeedKmh:320 };
+
+/* input */
+const input = {forward:false,back:false,left:false,right:false,brake:false};
+
+/* helpers */
+function addPointAt(x,z){
   const p = new THREE.Vector3(x,0,z);
   points.push(p);
   const m = makePointMesh(p);
   pointMeshes.push(m);
   scene.add(m);
 }
-
-function makePointMesh(pos) {
+function makePointMesh(pos){
   const g = new THREE.SphereGeometry(0.6,12,12);
   const mat = new THREE.MeshStandardMaterial({color:0xff0000});
   const m = new THREE.Mesh(g, mat);
@@ -180,25 +172,17 @@ function makePointMesh(pos) {
   m.castShadow = true;
   return m;
 }
-
-function clearTrack() {
+function clearTrack(){
   for (let m of pointMeshes) scene.remove(m);
-  pointMeshes.length = 0;
-  points.length = 0;
-  selectedPointIndex = -1;
+  pointMeshes.length = 0; points.length = 0; selectedPointIndex = -1;
   if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
   if (roadMesh) { scene.remove(roadMesh); roadMesh = null; }
-  for (let d of centerDashes) scene.remove(d); centerDashes.length=0;
+  for (let d of centerDashes) scene.remove(d); centerDashes.length = 0;
   while (autoWallGroup.children.length) autoWallGroup.remove(autoWallGroup.children[0]);
-  for (let e of manualEntities) scene.remove(e.mesh);
-  manualEntities.length = 0;
+  for (let e of manualEntities) scene.remove(e.mesh); manualEntities.length = 0;
 }
 
-/* Mouse interactions (editor) */
-let placeMode = 'none';
-let spawnT = 0.02;
-let spawnPoint = null;
-
+/* mouse editor */
 renderer.domElement.addEventListener('pointerdown', (ev)=>{
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
@@ -281,11 +265,11 @@ renderer.domElement.addEventListener('pointermove', (ev)=>{
     renderEditor();
   }
 });
-
 window.addEventListener('pointerup', ()=>{ dragging=false; dragIndex=-1; });
 
+/* keyboard */
 window.addEventListener('keydown', (e)=>{
-  // allow keys to work even if focus is on buttons/inputs
+  // editor keys
   if (mode === 'edit') {
     if (e.key === 'Delete' || e.key === 'Backspace') {
       if (selectedPointIndex >= 0) {
@@ -304,7 +288,7 @@ window.addEventListener('keydown', (e)=>{
     if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
   }
 
-  // test controls (W/A/S/D and arrows) — always listen but only apply when mode==='test'
+  // controls (always update input state; physics only applied in test mode)
   if (e.code === 'KeyW' || e.code === 'ArrowUp') input.forward = true;
   if (e.code === 'KeyS' || e.code === 'ArrowDown') input.back = true;
   if (e.code === 'KeyA' || e.code === 'ArrowLeft') input.left = true;
@@ -319,7 +303,7 @@ window.addEventListener('keyup', (e)=>{
   if (e.code === 'Space') input.brake = false;
 });
 
-/* Wheel zoom: only vertical change in editor */
+/* wheel zoom */
 renderer.domElement.addEventListener('wheel', (e)=>{
   if (mode === 'edit') {
     editorHeight = Math.max(20, Math.min(800, editorHeight + e.deltaY * 0.08));
@@ -330,7 +314,7 @@ renderer.domElement.addEventListener('wheel', (e)=>{
   }
 }, {passive:false});
 
-/* Render spline and road (robust) */
+/* renderEditor (keeps road generation) */
 function renderEditor() {
   try {
     if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
@@ -338,43 +322,28 @@ function renderEditor() {
     for (let d of centerDashes) scene.remove(d); centerDashes.length = 0;
     while (autoWallGroup.children.length) autoWallGroup.remove(autoWallGroup.children[0]);
 
-    if (points.length < 2) {
-      console.log('renderEditor: non ci sono abbastanza punti per costruire la strada');
-      return;
-    }
+    if (points.length < 2) return;
 
     const curve = buildCurveFromPoints();
-    if (!curve) {
-      console.warn('renderEditor: buildCurveFromPoints ha restituito null');
-      return;
-    }
+    if (!curve) return;
 
     const linePts = curve.getPoints(Math.max(64, points.length * 12));
     const geom = new THREE.BufferGeometry().setFromPoints(linePts);
     const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xffff66 }));
-    splineMesh = line;
-    scene.add(line);
+    splineMesh = line; scene.add(line);
 
-    const showRoad = (typeof showRoadCheckbox !== 'undefined') ? showRoadCheckbox.checked : true;
-    if (showRoad) {
+    if (showRoadCheckbox.checked) {
       const width = parseFloat(roadWidthInput.value) || 7.2;
       const roadGeom = buildRoad(curve, width, 600);
       if (roadGeom) {
-        roadMesh = new THREE.Mesh(roadGeom, roadMaterial);
-        roadMesh.receiveShadow = true;
-        roadMesh.position.y = 0.02;
-        roadMesh.renderOrder = 1;
-        scene.add(roadMesh);
-      } else {
-        console.warn('renderEditor: buildRoad ha restituito null/undefined');
+        roadMesh = new THREE.Mesh(roadGeom, new THREE.MeshStandardMaterial({color:0x555555, metalness:0.05, roughness:0.85, side:THREE.DoubleSide}));
+        roadMesh.receiveShadow = true; roadMesh.position.y = 0.02; scene.add(roadMesh);
       }
-    } else {
-      console.log('renderEditor: Show Road non selezionato, salto creazione strada');
     }
 
     addCenterDashes(curve);
 
-    if (typeof wallsToggle !== 'undefined' && wallsToggle.checked) {
+    if (wallsToggle.checked) {
       const wallH = parseFloat(wallHeightInput.value) || 2.0;
       const gap = parseFloat(wallGapInput.value) || 1.2;
       const offset = (parseFloat(roadWidthInput.value) || 7.2) / 2 + gap;
@@ -387,16 +356,46 @@ function renderEditor() {
       camera.up.set(0,1,0);
     }
   } catch (err) {
-    console.error('Errore in renderEditor:', err);
+    console.error('renderEditor error', err);
   }
 }
 
+/* curve helpers */
+function buildCurveFromPoints() {
+  if (points.length < 2) return null;
+  const pts = points.map(p=>p.clone());
+  const closed = pts[0].distanceTo(pts[pts.length-1]) < 1.0;
+  return new THREE.CatmullRomCurve3(pts, closed, 'catmullrom', 0.5);
+}
+function findClosestUOnCurve(curve, worldPos, samples=400) {
+  let bestU = 0, bestD = Infinity;
+  for (let i=0;i<=samples;i++){
+    const u = i/samples;
+    const p = curve.getPointAt(u);
+    const d = p.distanceTo(worldPos);
+    if (d < bestD) { bestD = d; bestU = u; }
+  }
+  return bestU;
+}
+function findNearestOnCenterline(pos, centerlineArr) {
+  let bestIdx = 0, bestDist = Infinity;
+  for (let i=0;i<centerlineArr.length;i++){
+    const d = pos.distanceTo(centerlineArr[i]);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  const next = centerlineArr[(bestIdx + 5) % centerlineArr.length];
+  const prev = centerlineArr[(bestIdx - 5 + centerlineArr.length) % centerlineArr.length];
+  const tangent = next.clone().sub(prev).normalize();
+  const left = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), tangent).normalize();
+  const vecToCar = pos.clone().sub(centerlineArr[bestIdx]);
+  const lateral = vecToCar.dot(left);
+  return { index: bestIdx, point: centerlineArr[bestIdx].clone(), tangent, lateral };
+}
+
+/* road builders */
 function buildRoad(curve, width, segments) {
   const geometry = new THREE.BufferGeometry();
-  const positions = [];
-  const normals = [];
-  const uvs = [];
-  const indices = [];
+  const positions = [], normals = [], uvs = [], indices = [];
   const up = new THREE.Vector3(0,1,0);
   for (let i=0;i<=segments;i++){
     const t = i/segments;
@@ -406,14 +405,12 @@ function buildRoad(curve, width, segments) {
     const half = width/2;
     const pl = p.clone().add(left.clone().multiplyScalar(half));
     const pr = p.clone().add(left.clone().multiplyScalar(-half));
-    positions.push(pl.x, pl.y+0.02, pl.z);
-    positions.push(pr.x, pr.y+0.02, pr.z);
+    positions.push(pl.x, pl.y+0.02, pl.z, pr.x, pr.y+0.02, pr.z);
     normals.push(0,1,0, 0,1,0);
     uvs.push(t*10,0, t*10,1);
     if (i<segments){
       const a = i*2, b = i*2+1, c = (i+1)*2, d = (i+1)*2+1;
-      indices.push(a,c,b);
-      indices.push(b,c,d);
+      indices.push(a,c,b, b,c,d);
     }
   }
   geometry.setIndex(indices);
@@ -424,7 +421,6 @@ function buildRoad(curve, width, segments) {
   geometry.computeVertexNormals();
   return geometry;
 }
-
 function addCenterDashes(curve, dashLen=3, gap=2) {
   const totalLen = curve.getLength();
   let traveled = 0;
@@ -433,7 +429,7 @@ function addCenterDashes(curve, dashLen=3, gap=2) {
     const t = curve.getUtoTmapping(u);
     const p = curve.getPointAt(t);
     const tangent = curve.getTangentAt(t).normalize();
-    const dash = new THREE.Mesh(new THREE.BoxGeometry(0.12,0.02,dashLen), dashMaterial);
+    const dash = new THREE.Mesh(new THREE.BoxGeometry(0.12,0.02,dashLen), new THREE.MeshStandardMaterial({color:0xffd24d}));
     dash.position.copy(p).add(new THREE.Vector3(0,0.03,0));
     const yaw = Math.atan2(tangent.x, tangent.z);
     dash.rotation.y = yaw;
@@ -442,7 +438,6 @@ function addCenterDashes(curve, dashLen=3, gap=2) {
     traveled += dashLen + gap;
   }
 }
-
 function addAutoWalls(curve, offsetX, height, thickness) {
   const segments = 200;
   for (let i=0;i<segments;i++){
@@ -461,128 +456,30 @@ function addAutoWalls(curve, offsetX, height, thickness) {
   }
 }
 
-/* Manual entities */
-function placeManualEntity(type, worldPos) {
-  const h = parseFloat(wallHeightInput.value) || 2.0;
-  const len = 6;
-  if (type === 'wall') {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1.0, h, len), new THREE.MeshStandardMaterial({color:0x777777}));
-    mesh.position.copy(worldPos); mesh.position.y = h/2;
-    scene.add(mesh);
-    manualEntities.push({mesh, type:'wall', params:{height:h, length:len}});
-  } else if (type === 'billboard') {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.2, 0.2), new THREE.MeshStandardMaterial({color:0xffcc66}));
-    mesh.position.copy(worldPos); mesh.position.y = 0.6;
-    scene.add(mesh);
-    manualEntities.push({mesh, type:'billboard', params:{height:1.2, length:0.2}});
-  }
-}
-
-/* Curve helpers */
-function buildCurveFromPoints() {
-  if (points.length < 2) return null;
-  const pts = points.map(p=>p.clone());
-  const closed = pts[0].distanceTo(pts[pts.length-1]) < 1.0;
-  return new THREE.CatmullRomCurve3(pts, closed, 'catmullrom', 0.5);
-}
-
-function findClosestUOnCurve(curve, worldPos, samples=400) {
-  let bestU = 0; let bestD = Infinity;
-  for (let i=0;i<=samples;i++){
-    const u = i/samples;
-    const p = curve.getPointAt(u);
-    const d = p.distanceTo(worldPos);
-    if (d < bestD) { bestD = d; bestU = u; }
-  }
-  return bestU;
-}
-
-function findNearestOnCenterline(pos, centerlineArr) {
-  let bestIdx = 0; let bestDist = Infinity;
-  for (let i=0;i<centerlineArr.length;i++){
-    const d = pos.distanceTo(centerlineArr[i]);
-    if (d < bestDist) { bestDist = d; bestIdx = i; }
-  }
-  const next = centerlineArr[(bestIdx + 5) % centerlineArr.length];
-  const prev = centerlineArr[(bestIdx - 5 + centerlineArr.length) % centerlineArr.length];
-  const tangent = next.clone().sub(prev).normalize();
-  const left = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), tangent).normalize();
-  const vecToCar = pos.clone().sub(centerlineArr[bestIdx]);
-  const lateral = vecToCar.dot(left);
-  return { index: bestIdx, point: centerlineArr[bestIdx].clone(), tangent, lateral };
-}
-
-/* Zoom controls (editor) */
-function editorZoomIn() {
-  editorHeight = Math.max(20, editorHeight - 8);
-  camera.position.set(0, editorHeight, 0);
-  camera.lookAt(0,0,0);
-}
-function editorZoomOut() {
-  editorHeight = Math.min(800, editorHeight + 8);
-  camera.position.set(0, editorHeight, 0);
-  camera.lookAt(0,0,0);
-}
-
-/* Save / Load */
+/* save/load (simple) */
 function saveToLocal() {
-  const data = {
-    points: points.map(p=>({x:p.x,z:p.z})),
-    roadWidth: parseFloat(roadWidthInput.value),
-    wallHeight: parseFloat(wallHeightInput.value),
-    wallsEnabled: wallsToggle.checked,
-    wallGap: parseFloat(wallGapInput.value),
-    manualEntities: manualEntities.map(e => ({
-      type: e.type,
-      pos: {x:e.mesh.position.x, y:e.mesh.position.y, z:e.mesh.position.z},
-      params: e.params
-    })),
-    spawnT
-  };
+  const data = { points: points.map(p=>({x:p.x,z:p.z})), roadWidth: parseFloat(roadWidthInput.value), wallHeight: parseFloat(wallHeightInput.value), wallsEnabled: wallsToggle.checked, wallGap: parseFloat(wallGapInput.value), manualEntities: manualEntities.map(e=>({type:e.type,pos:{x:e.mesh.position.x,y:e.mesh.position.y,z:e.mesh.position.z},params:e.params})), spawnT };
   localStorage.setItem('trackData', JSON.stringify(data));
   alert('Tracciato salvato');
 }
-
 function loadFromLocal() {
   const raw = localStorage.getItem('trackData');
   if (!raw) { alert('Nessun tracciato salvato'); return; }
   const data = JSON.parse(raw);
   applyTrackData(data);
 }
-
 function downloadJSON() {
-  const data = {
-    points: points.map(p=>({x:p.x,z:p.z})),
-    roadWidth: parseFloat(roadWidthInput.value),
-    wallHeight: parseFloat(wallHeightInput.value),
-    wallsEnabled: wallsToggle.checked,
-    wallGap: parseFloat(wallGapInput.value),
-    manualEntities: manualEntities.map(e => ({
-      type: e.type,
-      pos: {x:e.mesh.position.x, y:e.mesh.position.y, z:e.mesh.position.z},
-      params: e.params
-    })),
-    spawnT
-  };
+  const data = { points: points.map(p=>({x:p.x,z:p.z})), roadWidth: parseFloat(roadWidthInput.value), wallHeight: parseFloat(wallHeightInput.value), wallsEnabled: wallsToggle.checked, wallGap: parseFloat(wallGapInput.value), manualEntities: manualEntities.map(e=>({type:e.type,pos:{x:e.mesh.position.x,y:e.mesh.position.y,z:e.mesh.position.z},params:e.params})), spawnT };
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'track.json'; a.click();
-  URL.revokeObjectURL(url);
+  const a = document.createElement('a'); a.href = url; a.download = 'track.json'; a.click(); URL.revokeObjectURL(url);
 }
-
 function loadFromFile(e) {
-  const f = e.target.files[0];
-  if (!f) return;
+  const f = e.target.files[0]; if (!f) return;
   const reader = new FileReader();
-  reader.onload = ()=> {
-    const data = JSON.parse(reader.result);
-    applyTrackData(data);
-    renderEditor();
-  };
+  reader.onload = ()=> { const data = JSON.parse(reader.result); applyTrackData(data); renderEditor(); };
   reader.readAsText(f);
 }
-
 function applyTrackData(data) {
   clearTrack();
   if (!data || !data.points) return;
@@ -593,33 +490,22 @@ function applyTrackData(data) {
   wallGapInput.value = data.wallGap !== undefined ? data.wallGap : wallGapInput.value;
   if (data.manualEntities && data.manualEntities.length) {
     for (let me of data.manualEntities) {
-      const mesh = (me.type==='wall' || me.type==='roadWall') ? new THREE.Mesh(new THREE.BoxGeometry(1.0, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0x777777}))
-                                      : new THREE.Mesh(new THREE.BoxGeometry(0.6, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0xffcc66}));
-      mesh.position.set(me.pos.x, me.pos.y, me.pos.z);
-      scene.add(mesh);
-      manualEntities.push({mesh, type:me.type, params:me.params});
+      const mesh = (me.type==='wall' || me.type==='roadWall') ? new THREE.Mesh(new THREE.BoxGeometry(1.0, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0x777777})) : new THREE.Mesh(new THREE.BoxGeometry(0.6, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0xffcc66}));
+      mesh.position.set(me.pos.x, me.pos.y, me.pos.z); scene.add(mesh); manualEntities.push({mesh, type:me.type, params:me.params});
     }
   }
   spawnT = data.spawnT !== undefined ? data.spawnT : spawnT;
 }
 
-/* Test mode: spawn, physics, pit limiter */
-let player, ai, playerState, aiState, centerline = [], wallBoxes = [];
-const TUNING = { accel:11.0, brakeDecel:90.0, drag:1.2, maxSpeedKmh:320 };
-
+/* test/edit mode and spawn */
 function enterTestMode() {
   if (points.length < 2) { alert('Disegna almeno 2 punti per il tracciato'); return; }
-  mode = 'test';
-  btnTest.disabled = true; btnEdit.disabled = false;
+  mode = 'test'; btnTest.disabled = true; btnEdit.disabled = false;
   for (let m of pointMeshes) m.visible = false;
   const curve = buildCurveFromPoints();
   centerline = [];
   const samples = 2400;
-  for (let i=0;i<samples;i++){
-    const t = i/samples;
-    const p = curve.getPointAt(t);
-    centerline.push(new THREE.Vector3(p.x,0,p.z));
-  }
+  for (let i=0;i<samples;i++){ const t = i/samples; const p = curve.getPointAt(t); centerline.push(new THREE.Vector3(p.x,0,p.z)); }
   wallBoxes = [];
   autoWallGroup.children.forEach(w => wallBoxes.push(new THREE.Box3().setFromObject(w)));
   manualEntities.forEach(e => wallBoxes.push(new THREE.Box3().setFromObject(e.mesh)));
@@ -628,10 +514,8 @@ function enterTestMode() {
   speedHud.style.display = 'block';
   modeBadge.textContent = 'Test';
 }
-
 function enterEditMode() {
-  mode = 'edit';
-  btnTest.disabled = false; btnEdit.disabled = true;
+  mode = 'edit'; btnTest.disabled = false; btnEdit.disabled = true;
   if (player) { scene.remove(player); player = null; }
   if (ai) { scene.remove(ai); ai = null; }
   for (let m of pointMeshes) m.visible = true;
@@ -641,8 +525,6 @@ function enterEditMode() {
   camera.position.set(0, editorHeight, 0);
   camera.lookAt(0,0,0);
 }
-
-/* spawnVehicles: ensures visible player and stable heading */
 function spawnVehicles(curve) {
   if (player) scene.remove(player);
   if (ai) scene.remove(ai);
@@ -651,19 +533,15 @@ function spawnVehicles(curve) {
   const startT = spawnPoint ? findClosestUOnCurve(curve, spawnPoint) : spawnT;
   const startP = curve.getPointAt(startT);
   const startTan = curve.getTangentAt(startT).normalize();
-
-  // position and visible body
   player.position.set(startP.x, 0.5, startP.z);
-  const initialHeading = Math.atan2(startTan.x, startTan.z);
 
+  const initialHeading = Math.atan2(startTan.x, startTan.z);
   const bodyGeom = new THREE.BoxGeometry(2.2,0.5,4);
   const bodyMat = new THREE.MeshStandardMaterial({color:0x0055ff});
   const body = new THREE.Mesh(bodyGeom, bodyMat);
-  body.position.y = 0.4;
-  player.add(body);
+  body.position.y = 0.4; player.add(body);
   scene.add(player);
 
-  // AI
   ai = new THREE.Group();
   const aiT = (startT + 0.85) % 1.0;
   const aiP = curve.getPointAt(aiT);
@@ -671,33 +549,23 @@ function spawnVehicles(curve) {
   ai.position.set(aiP.x, 0.5, aiP.z);
   ai.rotation.y = Math.atan2(aiTan.x, aiTan.z);
   const aiBody = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), new THREE.MeshStandardMaterial({color:0xff5500}));
-  aiBody.position.y = 0.4; ai.add(aiBody);
-  scene.add(ai);
+  aiBody.position.y = 0.4; ai.add(aiBody); scene.add(ai);
 
-  // initialize state
   playerState = {velocity:0, heading: initialHeading, steerAngle:0, lapStartTime:performance.now(), lastLapAvgSpeed:null};
   aiState = {speed:8, index: Math.floor(centerline.length*0.85), targetSpeed:10};
-
   player.visible = true;
 }
 
-/* Controls state (global) */
-const input = {forward:false,back:false,left:false,right:false,brake:false};
-
-/* Player physics (tuned) and pit limiter on grass */
+/* physics */
 function updatePlayerPhysics(dt) {
   if (!playerState || !player) return;
-
-  const accel = TUNING.accel;
-  const brakeDecel = TUNING.brakeDecel;
-  const drag = TUNING.drag;
+  const accel = TUNING.accel, brakeDecel = TUNING.brakeDecel, drag = TUNING.drag;
   const maxSpeedMs = (TUNING.maxSpeedKmh || 320) / 3.6;
 
   let throttle = 0;
   if (mode === 'test') {
     if (input.forward && !input.back) throttle = 1;
     else if (input.back && !input.forward) throttle = -1;
-    else throttle = 0;
   }
 
   if (input.brake) {
@@ -714,7 +582,6 @@ function updatePlayerPhysics(dt) {
   if (mode === 'test') {
     if (input.left && !input.right) steerInput = 1;
     else if (input.right && !input.left) steerInput = -1;
-    else steerInput = 0;
   }
 
   const maxSteer = THREE.MathUtils.degToRad(30);
@@ -725,15 +592,12 @@ function updatePlayerPhysics(dt) {
   const wheelbase = 2.6;
   const dHeading = (playerState.velocity / Math.max(0.0001, wheelbase)) * Math.tan(playerState.steerAngle || 0);
   playerState.heading += dHeading * dt;
-
-  // normalize heading
   playerState.heading = Math.atan2(Math.sin(playerState.heading), Math.cos(playerState.heading));
 
   const forwardVec = new THREE.Vector3(Math.sin(playerState.heading), 0, Math.cos(playerState.heading));
   player.position.addScaledVector(forwardVec, playerState.velocity * dt);
   player.rotation.y = playerState.heading;
 
-  // pit limiter on grass
   if (centerline.length > 0) {
     const res = findNearestOnCenterline(player.position, centerline);
     const roadHalf = (parseFloat(roadWidthInput.value) || 7.2) / 2;
@@ -796,7 +660,7 @@ function updateAIPhysics(dt) {
   ai.position.y = 0.5;
 }
 
-/* Animation loop: camera follows player behind based on heading but remains horizontal (no pitch/roll) */
+/* Animation: camera placed BEHIND the car using BACKWARD vector, looks at player but stays horizontal */
 const clock = new THREE.Clock();
 function animate(){
   const dt = Math.min(0.05, clock.getDelta());
@@ -819,41 +683,39 @@ function animate(){
       return;
     }
 
-    // --- Camera follow: behind the car using its heading, but keep camera horizontal ---
+    // --- KEY: compute BACKWARD vector from heading and place camera behind the car ---
     camera.up.set(0,1,0);
+    const followHeight = 6;   // vertical offset
+    const followDist = 10;    // distance behind the car
 
-    const followHeight = 6;   // vertical offset above the player
-    const followDist  = 10;   // distance behind the player along its heading
-
-    // use stable heading from playerState if available
+    // stable heading from playerState
     const heading = (playerState && typeof playerState.heading === 'number') ? playerState.heading : player.rotation.y;
-    const forward = new THREE.Vector3(Math.sin(heading), 0, Math.cos(heading)).normalize();
 
-    // desired camera position: behind the car along its forward, at fixed height
-    const desired = player.position.clone()
-      .addScaledVector(forward, -Math.abs(followDist))
-      .setY(player.position.y + Math.abs(followHeight));
+    // BACKWARD vector (points from car toward camera when camera is behind)
+    const backward = new THREE.Vector3(-Math.sin(heading), 0, -Math.cos(heading)).normalize();
+
+    // desired camera position = player position + backward * followDist, at fixed height
+    const desired = player.position.clone().addScaledVector(backward, Math.abs(followDist));
+    desired.y = player.position.y + Math.abs(followHeight);
 
     // avoid camera crossing through the player
     const minDistance = 0.6;
     if (camera.position.distanceTo(desired) < minDistance) {
-      desired.addScaledVector(forward, -0.2);
+      desired.addScaledVector(backward, 0.2);
     }
 
-    // smooth interpolation
+    // smooth movement
     const t = Math.min(1, dt * 6.0);
     camera.position.lerp(desired, t);
 
-    // look target: player's position but at camera's height to avoid pitch (camera stays horizontal)
+    // look target: player's position but at camera's Y to keep camera horizontal (no pitch)
     const lookTarget = player.position.clone();
     lookTarget.y = camera.position.y;
 
-    // safety tiny offset
-    if (camera.position.distanceTo(lookTarget) < 0.001) lookTarget.z += 0.001;
-
+    // ensure lookAt points to the player (not opposite)
     camera.lookAt(lookTarget);
 
-    // ensure no roll
+    // remove any roll
     camera.rotation.z = 0;
 
     renderer.render(scene, camera);
@@ -863,7 +725,7 @@ function animate(){
 }
 animate();
 
-/* Seed sample track */
+/* seed sample */
 (function seedSample(){
   const sample = [
     {x:0,z:-220},{x:0,z:-160},{x:12,z:-130},{x:28,z:-100},{x:36,z:-60},
@@ -874,7 +736,7 @@ animate();
   renderEditor();
 })();
 
-/* Utility: setPlaceMode */
+/* place mode */
 function setPlaceMode(m) {
   placeMode = m;
   if (m === 'manualWall') modeBadge.textContent = 'Place Manual Walls';
@@ -883,9 +745,24 @@ function setPlaceMode(m) {
   else if (m === 'setSpawn') modeBadge.textContent = 'Set Spawn';
   else modeBadge.textContent = (mode==='edit' ? 'Editor' : 'Test');
 }
+
+/* small helpers for editor zoom */
+function editorZoomIn(){ editorHeight = Math.max(20, editorHeight - 8); camera.position.set(0, editorHeight, 0); camera.lookAt(0,0,0); }
+function editorZoomOut(){ editorHeight = Math.min(800, editorHeight + 8); camera.position.set(0, editorHeight, 0); camera.lookAt(0,0,0); }
+
+/* manual entities helper */
+function placeManualEntity(type, worldPos) {
+  const h = parseFloat(wallHeightInput.value) || 2.0;
+  const len = 6;
+  if (type === 'wall') {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1.0, h, len), new THREE.MeshStandardMaterial({color:0x777777}));
+    mesh.position.copy(worldPos); mesh.position.y = h/2; scene.add(mesh); manualEntities.push({mesh, type:'wall', params:{height:h, length:len}});
+  } else if (type === 'billboard') {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.2, 0.2), new THREE.MeshStandardMaterial({color:0xffcc66}));
+    mesh.position.copy(worldPos); mesh.position.y = 0.6; scene.add(mesh); manualEntities.push({mesh, type:'billboard', params:{height:1.2, length:0.2}});
+  }
+}
 </script>
 </body>
-
-
 </html>
 
