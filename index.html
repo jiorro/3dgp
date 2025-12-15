@@ -758,8 +758,8 @@ function updatePlayerPhysics(dt) {
     else if (input.right && !input.left) steerInput = -1;
   }
 
-  const maxSteer = THREE.MathUtils.degToRad(30);
-  const speedFactor = 1 - Math.min(1, Math.abs(playerState.velocity) / (maxSpeedMs));
+  const maxSteer = THREE.MathUtils.degToRad(18);
+  const speedFactor = 0.5 - Math.min(1, Math.abs(playerState.velocity) / (maxSpeedMs));
   const targetSteer = steerInput * maxSteer * (0.5 + 0.5 * speedFactor);
   playerState.steerAngle = THREE.MathUtils.lerp(playerState.steerAngle || 0, targetSteer, dt*8);
 
