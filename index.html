@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>3D Track Editor - Camera on Hood (Modified)</title>
+<title>3D Track Editor - Camera on Hood</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
@@ -69,13 +69,11 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
 
 <script>
-/*
-  Modified from your repository base.
-  Changes:
-  - Camera is parented to the player (anchored above the hood).
-  - A plane with texture 'player_hood.png' is placed on the hood.
-  - Removed manual camera-follow logic (camera follows because it's child of player).
-  - Everything else kept compatible with your original editor/test flow.
+/* Full updated index.html
+   - Renderer fixes and ambient light
+   - Editor camera top-down (editorHeight)
+   - Camera parented to player in spawnVehicles
+   - Hood image plane with filename player_hood.png and visible fallback
 */
 
 /* Scene setup */
@@ -88,12 +86,22 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 container.appendChild(renderer.domElement);
 
+// Renderer fixes for color and shadows
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMappingExposure = 1.0;
+renderer.setClearColor(0x87ceeb);
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+// Ambient light to avoid fully dark areas
+const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambient);
+
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
 camera.up.set(0,1,0);
 
 /* Lighting and ground */
 const hemi = new THREE.HemisphereLight(0xffffff,0x444444,0.9); hemi.position.set(0,50,0); scene.add(hemi);
-const dir = new THREE.DirectionalLight(0xffffff,0.8); dir.position.set(-10,20,10); dir.castShadow=true; scene.add(dir);
+const dir = new THREE.DirectionalLight(0xffffff,0.9); dir.position.set(-10,20,10); dir.castShadow=true; scene.add(dir);
 
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(2000,2000), new THREE.MeshStandardMaterial({color:0x2b2b2b}));
 ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
@@ -158,6 +166,9 @@ const plane = new THREE.Plane(new THREE.Vector3(0,1,0), 0);
 let placeMode = 'none';
 let spawnT = 0.02;
 let spawnPoint = null;
+
+/* Editor camera height */
+let editorHeight = 80;
 
 /* Player / AI */
 let player = null;
@@ -380,9 +391,11 @@ function renderEditor() {
     }
 
     if (mode === 'edit') {
-      camera.position.set(0, editorHeight, 0);
-      camera.lookAt(0,0,0);
+      // ensure camera is detached from player and positioned top-down
+      try { if (player) player.remove(camera); } catch(e) {}
       camera.up.set(0,1,0);
+      camera.position.set(0, editorHeight, 0);
+      camera.rotation.set(-0.15, 0, 0);
     }
   } catch (err) {
     console.error('renderEditor error', err);
@@ -666,7 +679,7 @@ function spawnVehicles(curve) {
     undefined,
     function(err) {
       const hoodGeom = new THREE.PlaneGeometry(1.6, 1.0);
-      const hoodMat = new THREE.MeshBasicMaterial({ color: 0x999999 });
+      const hoodMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.2, roughness: 0.6 });
       const hood = new THREE.Mesh(hoodGeom, hoodMat);
       hood.rotation.x = -Math.PI / 2;
       hood.position.set(0, 0.55, 1.2);
@@ -681,17 +694,18 @@ function spawnVehicles(curve) {
   try { if (camera.parent) camera.parent.remove(camera); } catch(e) {}
 
   player.add(camera);
+player.add(camera);
 
-  // camera local offset relative to player center (tweak as needed)
-  const CAM_LOCAL_X = 0;    // center
-  const CAM_LOCAL_Y = 1.6;  // height above ground
-  const CAM_LOCAL_Z = 0.9;  // forward relative to player center (over hood)
-  camera.position.set(CAM_LOCAL_X, CAM_LOCAL_Y, CAM_LOCAL_Z);
+// camera local offset relative to player center (tweak as needed)
+const CAM_LOCAL_X = 0;    // center
+const CAM_LOCAL_Y = 1.6;  // height above ground
+const CAM_LOCAL_Z = 0.9;  // forward relative to player center (over hood)
+camera.position.set(CAM_LOCAL_X, CAM_LOCAL_Y, CAM_LOCAL_Z);
 
-  // camera local rotation: slight pitch down so it looks forward over the hood
-  const CAM_PITCH = -0.18;
-  camera.rotation.set(CAM_PITCH, 0, 0);
-  camera.up.set(0,1,0);
+// camera local rotation: slight pitch down so it looks forward over the hood
+const CAM_PITCH = -0.18;
+camera.rotation.set(CAM_PITCH, 0, 0);
+camera.up.set(0,1,0);
 
   // AI
   ai = new THREE.Group();
@@ -841,7 +855,7 @@ function animate(){
 }
 animate();
 
-/* Seed sample track (unchanged) */
+/* Seed sample track */
 (function seedSample(){
   const sample = [
     {x:0,z:-220},{x:0,z:-160},{x:12,z:-130},{x:28,z:-100},{x:36,z:-60},
@@ -852,7 +866,7 @@ animate();
   renderEditor();
 })();
 
-/* Place mode helper (unchanged) */
+/* Place mode helper */
 function setPlaceMode(m) {
   placeMode = m;
   if (m === 'manualWall') modeBadge.textContent = 'Place Manual Walls';
@@ -862,11 +876,11 @@ function setPlaceMode(m) {
   else modeBadge.textContent = (mode==='edit' ? 'Editor' : 'Test');
 }
 
-/* Editor zoom helpers (unchanged) */
+/* Editor zoom helpers */
 function editorZoomIn() { editorHeight = Math.max(20, editorHeight - 8); camera.position.set(0, editorHeight, 0); camera.lookAt(0,0,0); }
 function editorZoomOut() { editorHeight = Math.min(800, editorHeight + 8); camera.position.set(0, editorHeight, 0); camera.lookAt(0,0,0); }
 
-/* Manual entities helper (unchanged) */
+/* Manual entities helper */
 function placeManualEntity(type, worldPos) {
   const h = parseFloat(wallHeightInput.value) || 2.0;
   const len = 6;
