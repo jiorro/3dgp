@@ -693,25 +693,20 @@ function spawnVehicles(curve) {
   // detach camera from any parent and attach to player (above hood)
   try { if (camera.parent) camera.parent.remove(camera); } catch(e) {}
 
+// attach camera to player (sopra il cofano) — incolla qui
 player.add(camera);
 
-// --- Camera local transform (modifica per correggere orientamento) ---
-// Se la camera guarda il bagagliaio, significa che la yaw locale è invertita.
-// Due opzioni pratiche:
-//  A) mantenere CAM_LOCAL_Z positivo e impostare CAM_YAW = Math.PI  (gira la camera di 180°)
-//  B) invertire CAM_LOCAL_Z (negativo) e mantenere CAM_YAW = 0
-// Qui uso l'opzione A perché è la più semplice da applicare senza cambiare offset.
+// camera local offset relativo al centro del player
+const CAM_LOCAL_X = 0;    // centro
+const CAM_LOCAL_Y = 1.45; // altezza sopra il suolo (leggermente più bassa)
+const CAM_LOCAL_Z = 0.35; // distanza avanti rispetto al centro macchina (ridotta per non essere troppo avanti)
 
-const CAM_LOCAL_X = 0;      // spostamento laterale (0 = centro)
-const CAM_LOCAL_Y = 1.6;    // altezza sopra il suolo (regola se troppo alto/basso)
-const CAM_LOCAL_Z = 0.9;    // avanti rispetto al centro macchina (positivo = davanti)
-const CAM_PITCH   = -0.18;  // inclinazione verso il basso (radians)
-const CAM_YAW     = Math.PI; // yaw locale: Math.PI = ruota di 180° per guardare "in avanti"
-const CAM_ROLL    = 0;
+// rotazione locale: pitch verso il basso, yaw corretto per guardare in avanti
+const CAM_PITCH = -0.14;  // meno inclinata per vedere più strada
+const CAM_YAW = Math.PI;  // mantiene la camera orientata correttamente verso il cofano
+const CAM_ROLL = 0;
 
 camera.position.set(CAM_LOCAL_X, CAM_LOCAL_Y, CAM_LOCAL_Z);
-
-// Imposta rotazione locale con yaw corretta
 camera.rotation.set(CAM_PITCH, CAM_YAW, CAM_ROLL);
 camera.up.set(0,1,0);
 
