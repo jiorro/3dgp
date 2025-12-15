@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8" />
-<title>3D Track Editor - Camera Fixed Orientation</title>
+<title>3D Track Editor - Camera on Hood (Modified)</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   html,body{height:100%;margin:0;background:#111;color:#fff;font-family:Arial,Helvetica,sans-serif}
@@ -23,6 +23,7 @@
 
 <div class="panel" id="ui">
   <h3>Track Editor</h3>
+
   <div class="row">
     <button id="btnClear">Clear</button>
     <button id="btnSave">Save</button>
@@ -30,15 +31,18 @@
     <button id="btnDownload">Download JSON</button>
     <input type="file" id="fileInput" accept=".json">
   </div>
+
   <div style="margin-top:6px" class="row">
     <label>Road Width <input id="roadWidth" type="number" value="7.2" step="0.2" style="width:80px"></label>
     <label>Wall Height <input id="wallHeight" type="number" value="2.0" step="0.1" style="width:80px"></label>
     <label>Wall Gap <input id="wallGap" type="number" value="1.2" step="0.1" style="width:80px"></label>
   </div>
+
   <div style="margin-top:6px" class="row">
     <label><input type="checkbox" id="autoWalls" checked> Auto Walls</label>
     <label><input type="checkbox" id="showRoad" checked> Show Road</label>
   </div>
+
   <div style="margin-top:6px" class="row">
     <button id="modePlaceWalls">Place Manual Walls</button>
     <button id="modePlaceBillboards">Place Billboards</button>
@@ -47,24 +51,34 @@
     <button id="btnTest">Test Track</button>
     <button id="btnEdit" disabled>Edit Track</button>
   </div>
+
   <div style="margin-top:8px" class="row">
     <strong>Editor Zoom</strong>
     <button id="zoomIn">+</button>
     <button id="zoomOut">−</button>
     <span class="small">o usa rotella / tasti + -</span>
   </div>
+
   <p class="small" style="margin-top:8px">Click per aggiungere punti; trascina per spostare; seleziona punto e premi Delete per rimuovere. Premi V per nascondere/mostrare il pannello.</p>
 </div>
 
 <div id="speedHud" class="speed">Speed: 0 km/h</div>
 <div id="modeBadge" class="modeBadge">Editor</div>
-<div class="hint">Controls: W/S accelerate/brake, A/D steer or arrows; camera stays fixed in orientation and follows the car position</div>
+<div class="hint">Controls: W/S accelerate/brake, A/D steer or arrows; camera ancorata al cofano; immagine cofano: player_hood.png</div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.min.js"></script>
-<script>
-/* Single-file: camera follows player position but keeps a fixed orientation (never rotates).
-   Key: DO NOT call camera.lookAt in test mode; set camera.rotation to fixed values and only translate camera.position. */
 
+<script>
+/*
+  Modified from your repository base.
+  Changes:
+  - Camera is parented to the player (anchored above the hood).
+  - A plane with texture 'player_hood.png' is placed on the hood.
+  - Removed manual camera-follow logic (camera follows because it's child of player).
+  - Everything else kept compatible with your original editor/test flow.
+*/
+
+/* Scene setup */
 const container = document.getElementById('container');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
@@ -77,14 +91,7 @@ container.appendChild(renderer.domElement);
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
 camera.up.set(0,1,0);
 
-// FIXED camera orientation: slight tilt down, yaw fixed to 0, no roll
-// This orientation will never change during the test mode.
-const FIXED_CAMERA_ROTATION = { x: -0.15, y: 0, z: 0 }; // radians
-
-let editorHeight = 120;
-camera.position.set(0, editorHeight, 0);
-camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
-
+/* Lighting and ground */
 const hemi = new THREE.HemisphereLight(0xffffff,0x444444,0.9); hemi.position.set(0,50,0); scene.add(hemi);
 const dir = new THREE.DirectionalLight(0xffffff,0.8); dir.position.set(-10,20,10); dir.castShadow=true; scene.add(dir);
 
@@ -131,7 +138,7 @@ modeSetSpawn.onclick = ()=> setPlaceMode('setSpawn');
 zoomInBtn.addEventListener('click', editorZoomIn);
 zoomOutBtn.addEventListener('click', editorZoomOut);
 
-/* state */
+/* State */
 let mode = 'edit';
 const points = [];
 const pointMeshes = [];
@@ -152,22 +159,28 @@ let placeMode = 'none';
 let spawnT = 0.02;
 let spawnPoint = null;
 
-/* player/ai */
-let player, ai, playerState, aiState, centerline = [], wallBoxes = [];
+/* Player / AI */
+let player = null;
+let ai = null;
+let playerState = null;
+let aiState = null;
+let centerline = [];
+let wallBoxes = [];
 const TUNING = { accel:11.0, brakeDecel:90.0, drag:1.2, maxSpeedKmh:320 };
 
-/* input */
+/* Input */
 const input = {forward:false,back:false,left:false,right:false,brake:false};
 
-/* helpers */
-function addPointAt(x,z){
+/* Helpers: points & meshes */
+function addPointAt(x,z) {
   const p = new THREE.Vector3(x,0,z);
   points.push(p);
   const m = makePointMesh(p);
   pointMeshes.push(m);
   scene.add(m);
 }
-function makePointMesh(pos){
+
+function makePointMesh(pos) {
   const g = new THREE.SphereGeometry(0.6,12,12);
   const mat = new THREE.MeshStandardMaterial({color:0xff0000});
   const m = new THREE.Mesh(g, mat);
@@ -175,17 +188,21 @@ function makePointMesh(pos){
   m.castShadow = true;
   return m;
 }
-function clearTrack(){
+
+function clearTrack() {
   for (let m of pointMeshes) scene.remove(m);
-  pointMeshes.length = 0; points.length = 0; selectedPointIndex = -1;
+  pointMeshes.length = 0;
+  points.length = 0;
+  selectedPointIndex = -1;
   if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
   if (roadMesh) { scene.remove(roadMesh); roadMesh = null; }
   for (let d of centerDashes) scene.remove(d); centerDashes.length = 0;
   while (autoWallGroup.children.length) autoWallGroup.remove(autoWallGroup.children[0]);
-  for (let e of manualEntities) scene.remove(e.mesh); manualEntities.length = 0;
+  for (let e of manualEntities) scene.remove(e.mesh);
+  manualEntities.length = 0;
 }
 
-/* mouse editor */
+/* Mouse interactions (editor) */
 renderer.domElement.addEventListener('pointerdown', (ev)=>{
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
@@ -268,9 +285,9 @@ renderer.domElement.addEventListener('pointermove', (ev)=>{
     renderEditor();
   }
 });
+
 window.addEventListener('pointerup', ()=>{ dragging=false; dragIndex=-1; });
 
-/* keyboard */
 window.addEventListener('keydown', (e)=>{
   // editor keys
   if (mode === 'edit') {
@@ -306,7 +323,7 @@ window.addEventListener('keyup', (e)=>{
   if (e.code === 'Space') input.brake = false;
 });
 
-/* wheel zoom */
+/* Wheel zoom: only vertical change in editor */
 renderer.domElement.addEventListener('wheel', (e)=>{
   if (mode === 'edit') {
     editorHeight = Math.max(20, Math.min(800, editorHeight + e.deltaY * 0.08));
@@ -317,7 +334,7 @@ renderer.domElement.addEventListener('wheel', (e)=>{
   }
 }, {passive:false});
 
-/* renderEditor */
+/* Render spline and road (robust) */
 function renderEditor() {
   try {
     if (splineMesh) { scene.remove(splineMesh); splineMesh = null; }
@@ -325,28 +342,37 @@ function renderEditor() {
     for (let d of centerDashes) scene.remove(d); centerDashes.length = 0;
     while (autoWallGroup.children.length) autoWallGroup.remove(autoWallGroup.children[0]);
 
-    if (points.length < 2) return;
+    if (points.length < 2) {
+      return;
+    }
 
     const curve = buildCurveFromPoints();
-    if (!curve) return;
+    if (!curve) {
+      return;
+    }
 
     const linePts = curve.getPoints(Math.max(64, points.length * 12));
     const geom = new THREE.BufferGeometry().setFromPoints(linePts);
     const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xffff66 }));
-    splineMesh = line; scene.add(line);
+    splineMesh = line;
+    scene.add(line);
 
-    if (showRoadCheckbox.checked) {
+    const showRoad = (typeof showRoadCheckbox !== 'undefined') ? showRoadCheckbox.checked : true;
+    if (showRoad) {
       const width = parseFloat(roadWidthInput.value) || 7.2;
       const roadGeom = buildRoad(curve, width, 600);
       if (roadGeom) {
         roadMesh = new THREE.Mesh(roadGeom, new THREE.MeshStandardMaterial({color:0x555555, metalness:0.05, roughness:0.85, side:THREE.DoubleSide}));
-        roadMesh.receiveShadow = true; roadMesh.position.y = 0.02; scene.add(roadMesh);
+        roadMesh.receiveShadow = true;
+        roadMesh.position.y = 0.02;
+        roadMesh.renderOrder = 1;
+        scene.add(roadMesh);
       }
     }
 
     addCenterDashes(curve);
 
-    if (wallsToggle.checked) {
+    if (typeof wallsToggle !== 'undefined' && wallsToggle.checked) {
       const wallH = parseFloat(wallHeightInput.value) || 2.0;
       const gap = parseFloat(wallGapInput.value) || 1.2;
       const offset = (parseFloat(roadWidthInput.value) || 7.2) / 2 + gap;
@@ -357,23 +383,22 @@ function renderEditor() {
       camera.position.set(0, editorHeight, 0);
       camera.lookAt(0,0,0);
       camera.up.set(0,1,0);
-      // keep fixed rotation even in editor view after repositioning
-      camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
     }
   } catch (err) {
     console.error('renderEditor error', err);
   }
 }
 
-/* curve helpers */
+/* Curve helpers */
 function buildCurveFromPoints() {
   if (points.length < 2) return null;
   const pts = points.map(p=>p.clone());
   const closed = pts[0].distanceTo(pts[pts.length-1]) < 1.0;
   return new THREE.CatmullRomCurve3(pts, closed, 'catmullrom', 0.5);
 }
+
 function findClosestUOnCurve(curve, worldPos, samples=400) {
-  let bestU = 0, bestD = Infinity;
+  let bestU = 0; let bestD = Infinity;
   for (let i=0;i<=samples;i++){
     const u = i/samples;
     const p = curve.getPointAt(u);
@@ -382,8 +407,9 @@ function findClosestUOnCurve(curve, worldPos, samples=400) {
   }
   return bestU;
 }
+
 function findNearestOnCenterline(pos, centerlineArr) {
-  let bestIdx = 0, bestDist = Infinity;
+  let bestIdx = 0; let bestDist = Infinity;
   for (let i=0;i<centerlineArr.length;i++){
     const d = pos.distanceTo(centerlineArr[i]);
     if (d < bestDist) { bestDist = d; bestIdx = i; }
@@ -397,10 +423,13 @@ function findNearestOnCenterline(pos, centerlineArr) {
   return { index: bestIdx, point: centerlineArr[bestIdx].clone(), tangent, lateral };
 }
 
-/* road builders */
+/* Road builders (unchanged) */
 function buildRoad(curve, width, segments) {
   const geometry = new THREE.BufferGeometry();
-  const positions = [], normals = [], uvs = [], indices = [];
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
   const up = new THREE.Vector3(0,1,0);
   for (let i=0;i<=segments;i++){
     const t = i/segments;
@@ -410,12 +439,14 @@ function buildRoad(curve, width, segments) {
     const half = width/2;
     const pl = p.clone().add(left.clone().multiplyScalar(half));
     const pr = p.clone().add(left.clone().multiplyScalar(-half));
-    positions.push(pl.x, pl.y+0.02, pl.z, pr.x, pr.y+0.02, pr.z);
+    positions.push(pl.x, pl.y+0.02, pl.z);
+    positions.push(pr.x, pr.y+0.02, pr.z);
     normals.push(0,1,0, 0,1,0);
     uvs.push(t*10,0, t*10,1);
     if (i<segments){
       const a = i*2, b = i*2+1, c = (i+1)*2, d = (i+1)*2+1;
-      indices.push(a,c,b, b,c,d);
+      indices.push(a,c,b);
+      indices.push(b,c,d);
     }
   }
   geometry.setIndex(indices);
@@ -426,6 +457,7 @@ function buildRoad(curve, width, segments) {
   geometry.computeVertexNormals();
   return geometry;
 }
+
 function addCenterDashes(curve, dashLen=3, gap=2) {
   const totalLen = curve.getLength();
   let traveled = 0;
@@ -443,6 +475,7 @@ function addCenterDashes(curve, dashLen=3, gap=2) {
     traveled += dashLen + gap;
   }
 }
+
 function addAutoWalls(curve, offsetX, height, thickness) {
   const segments = 200;
   for (let i=0;i<segments;i++){
@@ -461,30 +494,82 @@ function addAutoWalls(curve, offsetX, height, thickness) {
   }
 }
 
-/* save/load (simple) */
+/* Manual entities */
+function placeManualEntity(type, worldPos) {
+  const h = parseFloat(wallHeightInput.value) || 2.0;
+  const len = 6;
+  if (type === 'wall') {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1.0, h, len), new THREE.MeshStandardMaterial({color:0x777777}));
+    mesh.position.copy(worldPos); mesh.position.y = h/2;
+    scene.add(mesh);
+    manualEntities.push({mesh, type:'wall', params:{height:h, length:len}});
+  } else if (type === 'billboard') {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.2, 0.2), new THREE.MeshStandardMaterial({color:0xffcc66}));
+    mesh.position.copy(worldPos); mesh.position.y = 0.6;
+    scene.add(mesh);
+    manualEntities.push({mesh, type:'billboard', params:{height:1.2, length:0.2}});
+  }
+}
+
+/* Save / Load (unchanged) */
 function saveToLocal() {
-  const data = { points: points.map(p=>({x:p.x,z:p.z})), roadWidth: parseFloat(roadWidthInput.value), wallHeight: parseFloat(wallHeightInput.value), wallsEnabled: wallsToggle.checked, wallGap: parseFloat(wallGapInput.value), manualEntities: manualEntities.map(e=>({type:e.type,pos:{x:e.mesh.position.x,y:e.mesh.position.y,z:e.mesh.position.z},params:e.params})), spawnT };
+  const data = {
+    points: points.map(p=>({x:p.x,z:p.z})),
+    roadWidth: parseFloat(roadWidthInput.value),
+    wallHeight: parseFloat(wallHeightInput.value),
+    wallsEnabled: wallsToggle.checked,
+    wallGap: parseFloat(wallGapInput.value),
+    manualEntities: manualEntities.map(e => ({
+      type: e.type,
+      pos: {x:e.mesh.position.x, y:e.mesh.position.y, z:e.mesh.position.z},
+      params: e.params
+    })),
+    spawnT
+  };
   localStorage.setItem('trackData', JSON.stringify(data));
   alert('Tracciato salvato');
 }
+
 function loadFromLocal() {
   const raw = localStorage.getItem('trackData');
   if (!raw) { alert('Nessun tracciato salvato'); return; }
   const data = JSON.parse(raw);
   applyTrackData(data);
 }
+
 function downloadJSON() {
-  const data = { points: points.map(p=>({x:p.x,z:p.z})), roadWidth: parseFloat(roadWidthInput.value), wallHeight: parseFloat(wallHeightInput.value), wallsEnabled: wallsToggle.checked, wallGap: parseFloat(wallGapInput.value), manualEntities: manualEntities.map(e=>({type:e.type,pos:{x:e.mesh.position.x,y:e.mesh.position.y,z:e.mesh.position.z},params:e.params})), spawnT };
+  const data = {
+    points: points.map(p=>({x:p.x,z:p.z})),
+    roadWidth: parseFloat(roadWidthInput.value),
+    wallHeight: parseFloat(wallHeightInput.value),
+    wallsEnabled: wallsToggle.checked,
+    wallGap: parseFloat(wallGapInput.value),
+    manualEntities: manualEntities.map(e => ({
+      type: e.type,
+      pos: {x:e.mesh.position.x, y:e.mesh.position.y, z:e.mesh.position.z},
+      params: e.params
+    })),
+    spawnT
+  };
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'track.json'; a.click(); URL.revokeObjectURL(url);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'track.json'; a.click();
+  URL.revokeObjectURL(url);
 }
+
 function loadFromFile(e) {
-  const f = e.target.files[0]; if (!f) return;
+  const f = e.target.files[0];
+  if (!f) return;
   const reader = new FileReader();
-  reader.onload = ()=> { const data = JSON.parse(reader.result); applyTrackData(data); renderEditor(); };
+  reader.onload = ()=> {
+    const data = JSON.parse(reader.result);
+    applyTrackData(data);
+    renderEditor();
+  };
   reader.readAsText(f);
 }
+
 function applyTrackData(data) {
   clearTrack();
   if (!data || !data.points) return;
@@ -495,60 +580,120 @@ function applyTrackData(data) {
   wallGapInput.value = data.wallGap !== undefined ? data.wallGap : wallGapInput.value;
   if (data.manualEntities && data.manualEntities.length) {
     for (let me of data.manualEntities) {
-      const mesh = (me.type==='wall' || me.type==='roadWall') ? new THREE.Mesh(new THREE.BoxGeometry(1.0, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0x777777})) : new THREE.Mesh(new THREE.BoxGeometry(0.6, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0xffcc66}));
-      mesh.position.set(me.pos.x, me.pos.y, me.pos.z); scene.add(mesh); manualEntities.push({mesh, type:me.type, params:me.params});
+      const mesh = (me.type==='wall' || me.type==='roadWall') ? new THREE.Mesh(new THREE.BoxGeometry(1.0, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0x777777}))
+                                      : new THREE.Mesh(new THREE.BoxGeometry(0.6, me.params.height, me.params.length), new THREE.MeshStandardMaterial({color:0xffcc66}));
+      mesh.position.set(me.pos.x, me.pos.y, me.pos.z);
+      scene.add(mesh);
+      manualEntities.push({mesh, type:me.type, params:me.params});
     }
   }
   spawnT = data.spawnT !== undefined ? data.spawnT : spawnT;
 }
 
-/* test/edit mode and spawn */
+/* Test mode: spawn, physics, pit limiter */
 function enterTestMode() {
   if (points.length < 2) { alert('Disegna almeno 2 punti per il tracciato'); return; }
-  mode = 'test'; btnTest.disabled = true; btnEdit.disabled = false;
+  mode = 'test';
+  btnTest.disabled = true; btnEdit.disabled = false;
   for (let m of pointMeshes) m.visible = false;
   const curve = buildCurveFromPoints();
   centerline = [];
   const samples = 2400;
-  for (let i=0;i<samples;i++){ const t = i/samples; const p = curve.getPointAt(t); centerline.push(new THREE.Vector3(p.x,0,p.z)); }
+  for (let i=0;i<samples;i++){
+    const t = i/samples;
+    const p = curve.getPointAt(t);
+    centerline.push(new THREE.Vector3(p.x,0,p.z));
+  }
   wallBoxes = [];
   autoWallGroup.children.forEach(w => wallBoxes.push(new THREE.Box3().setFromObject(w)));
   manualEntities.forEach(e => wallBoxes.push(new THREE.Box3().setFromObject(e.mesh)));
   spawnVehicles(curve);
   camera.up.set(0,1,0);
-  // ensure camera rotation stays fixed when entering test
-  camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
   speedHud.style.display = 'block';
   modeBadge.textContent = 'Test';
 }
+
 function enterEditMode() {
-  mode = 'edit'; btnTest.disabled = false; btnEdit.disabled = true;
-  if (player) { scene.remove(player); player = null; }
+  mode = 'edit';
+  btnTest.disabled = false; btnEdit.disabled = true;
+  if (player) { try { player.remove(camera); } catch(e) {} scene.remove(player); player = null; playerState = null; }
   if (ai) { scene.remove(ai); ai = null; }
   for (let m of pointMeshes) m.visible = true;
   speedHud.style.display = 'none';
   modeBadge.textContent = 'Editor';
   camera.up.set(0,1,0);
   camera.position.set(0, editorHeight, 0);
-  camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z);
+  camera.rotation.set(-0.15, 0, 0);
 }
+
+/* Modified spawnVehicles: add hood image and parent camera to player */
 function spawnVehicles(curve) {
   if (player) scene.remove(player);
   if (ai) scene.remove(ai);
 
   player = new THREE.Group();
+
   const startT = spawnPoint ? findClosestUOnCurve(curve, spawnPoint) : spawnT;
   const startP = curve.getPointAt(startT);
   const startTan = curve.getTangentAt(startT).normalize();
+
   player.position.set(startP.x, 0.5, startP.z);
 
   const initialHeading = Math.atan2(startTan.x, startTan.z);
-  const bodyGeom = new THREE.BoxGeometry(2.2,0.5,4);
-  const bodyMat = new THREE.MeshStandardMaterial({color:0x0055ff});
-  const body = new THREE.Mesh(bodyGeom, bodyMat);
-  body.position.y = 0.4; player.add(body);
+
+  const body = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), new THREE.MeshStandardMaterial({color:0x0055ff}));
+  body.position.y = 0.4;
+  player.add(body);
+
+  // HOOD IMAGE: exact filename (place this file in same folder as index.html)
+  const HOOD_IMAGE_NAME = 'player_hood.png';
+
+  const loader = new THREE.TextureLoader();
+  loader.load(
+    HOOD_IMAGE_NAME,
+    function (tex) {
+      tex.encoding = THREE.sRGBEncoding;
+      const aspect = tex.image.width > 0 ? (tex.image.height / tex.image.width) : 1;
+      const hoodWidth = 1.6;
+      const hoodGeom = new THREE.PlaneGeometry(hoodWidth, hoodWidth * aspect);
+      const hoodMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+      const hood = new THREE.Mesh(hoodGeom, hoodMat);
+      hood.rotation.x = -Math.PI / 2; // lay flat on hood
+      hood.position.set(0, 0.55, 1.2); // adjust to sit on hood
+      hood.renderOrder = 999;
+      player.add(hood);
+    },
+    undefined,
+    function(err) {
+      const hoodGeom = new THREE.PlaneGeometry(1.6, 1.0);
+      const hoodMat = new THREE.MeshBasicMaterial({ color: 0x999999 });
+      const hood = new THREE.Mesh(hoodGeom, hoodMat);
+      hood.rotation.x = -Math.PI / 2;
+      hood.position.set(0, 0.55, 1.2);
+      player.add(hood);
+      console.warn('Impossibile caricare', HOOD_IMAGE_NAME, err);
+    }
+  );
+
   scene.add(player);
 
+  // detach camera from any parent and attach to player (above hood)
+  try { if (camera.parent) camera.parent.remove(camera); } catch(e) {}
+
+  player.add(camera);
+
+  // camera local offset relative to player center (tweak as needed)
+  const CAM_LOCAL_X = 0;    // center
+  const CAM_LOCAL_Y = 1.6;  // height above ground
+  const CAM_LOCAL_Z = 0.9;  // forward relative to player center (over hood)
+  camera.position.set(CAM_LOCAL_X, CAM_LOCAL_Y, CAM_LOCAL_Z);
+
+  // camera local rotation: slight pitch down so it looks forward over the hood
+  const CAM_PITCH = -0.18;
+  camera.rotation.set(CAM_PITCH, 0, 0);
+  camera.up.set(0,1,0);
+
+  // AI
   ai = new THREE.Group();
   const aiT = (startT + 0.85) % 1.0;
   const aiP = curve.getPointAt(aiT);
@@ -556,23 +701,28 @@ function spawnVehicles(curve) {
   ai.position.set(aiP.x, 0.5, aiP.z);
   ai.rotation.y = Math.atan2(aiTan.x, aiTan.z);
   const aiBody = new THREE.Mesh(new THREE.BoxGeometry(2.2,0.5,4), new THREE.MeshStandardMaterial({color:0xff5500}));
-  aiBody.position.y = 0.4; ai.add(aiBody); scene.add(ai);
+  aiBody.position.y = 0.4; ai.add(aiBody);
+  scene.add(ai);
 
   playerState = {velocity:0, heading: initialHeading, steerAngle:0, lapStartTime:performance.now(), lastLapAvgSpeed:null};
   aiState = {speed:8, index: Math.floor(centerline.length*0.85), targetSpeed:10};
   player.visible = true;
 }
 
-/* physics */
+/* physics (unchanged) */
 function updatePlayerPhysics(dt) {
   if (!playerState || !player) return;
-  const accel = TUNING.accel, brakeDecel = TUNING.brakeDecel, drag = TUNING.drag;
+
+  const accel = TUNING.accel;
+  const brakeDecel = TUNING.brakeDecel;
+  const drag = TUNING.drag;
   const maxSpeedMs = (TUNING.maxSpeedKmh || 320) / 3.6;
 
   let throttle = 0;
   if (mode === 'test') {
     if (input.forward && !input.back) throttle = 1;
     else if (input.back && !input.forward) throttle = -1;
+    else throttle = 0;
   }
 
   if (input.brake) {
@@ -599,6 +749,7 @@ function updatePlayerPhysics(dt) {
   const wheelbase = 2.6;
   const dHeading = (playerState.velocity / Math.max(0.0001, wheelbase)) * Math.tan(playerState.steerAngle || 0);
   playerState.heading += dHeading * dt;
+
   playerState.heading = Math.atan2(Math.sin(playerState.heading), Math.cos(playerState.heading));
 
   const forwardVec = new THREE.Vector3(Math.sin(playerState.heading), 0, Math.cos(playerState.heading));
@@ -620,7 +771,7 @@ function updatePlayerPhysics(dt) {
   speedHud.textContent = `Speed: ${kmh} km/h`;
 }
 
-/* AI */
+/* AI (unchanged) */
 function updateAIPhysics(dt) {
   if (!aiState || !ai) return;
   const lookahead = 18;
@@ -667,27 +818,13 @@ function updateAIPhysics(dt) {
   ai.position.y = 0.5;
 }
 
-/* Animation: camera TRANSLATES to follow player but KEEPS FIXED ORIENTATION */
+/* Animation: camera is child of player so no manual follow needed */
 const clock = new THREE.Clock();
-function animate() {
+function animate(){
   const dt = Math.min(0.05, clock.getDelta());
 
   if (mode === 'edit') {
-    // editor: posizione fissa dall'alto (rotazione fissa)
     camera.position.set(0, editorHeight, 0);
-    camera.up.set(0,1,0);
-    camera.rotation.set(-0.15, 0, 0); // pitch leggero verso il basso, yaw=0, roll=0
-    renderer.render(scene, camera);
-    requestAnimationFrame(animate);
-    return;
-  }
-
-  // test mode
-  updatePlayerPhysics(dt);
-  updateAIPhysics(dt);
-
-  if (!player) {
-    camera.position.lerp(new THREE.Vector3(0, Math.max(20, editorHeight/2), 0), Math.min(1, dt*3));
     camera.up.set(0,1,0);
     camera.rotation.set(-0.15, 0, 0);
     renderer.render(scene, camera);
@@ -695,47 +832,16 @@ function animate() {
     return;
   }
 
-  // --- CAMERA: solo TRANSLAZIONE, rotazione completamente FISSA ---
-  camera.up.set(0,1,0);
+  updatePlayerPhysics(dt);
+  updateAIPhysics(dt);
 
-  // offset in coordinate mondo (X,Z) rispetto alla posizione del player
-  const followHeight = 6;    // altezza sopra il player
-  const offsetX = 0;        // spostamento laterale fisso (world X)
-  const offsetZ = -10;      // distanza dietro in asse Z mondo (negativo = dietro)
-
-  // posizione desiderata (segui X e Z del player, ma con offset fisso nel mondo)
-  const desired = new THREE.Vector3(
-    player.position.x + offsetX,
-    player.position.y + Math.abs(followHeight),
-    player.position.z + offsetZ
-  );
-
-  // evita che la camera passi dentro il player
-  const minDistance = 0.5;
-  if (camera.position.distanceTo(desired) < minDistance) {
-    // sposta leggermente lungo Z mondo per non coincidere
-    desired.z += (desired.z >= player.position.z) ? 0.2 : -0.2;
-  }
-
-  // interpolazione morbida della posizione
-  const t = Math.min(1, dt * 6.0);
-  camera.position.lerp(desired, t);
-
-  // FORZA rotazione fissa: nessun lookAt, nessun aggiornamento yaw/pitch/roll dinamico
-  // Modifica questi valori se vuoi che la camera guardi sempre in un'altra direzione del mondo:
-  // - per guardare verso +Z usa rotation.y = Math.PI
-  // - per guardare verso -Z usa rotation.y = 0
-  camera.rotation.set(-0.15, 0, 0); // (pitch, yaw, roll) in radianti
-  camera.up.set(0,1,0);
-
-  // render
+  // camera is child of player: it moves/rotates with the player automatically
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
-
 animate();
 
-/* seed sample */
+/* Seed sample track (unchanged) */
 (function seedSample(){
   const sample = [
     {x:0,z:-220},{x:0,z:-160},{x:12,z:-130},{x:28,z:-100},{x:36,z:-60},
@@ -746,7 +852,7 @@ animate();
   renderEditor();
 })();
 
-/* place mode */
+/* Place mode helper (unchanged) */
 function setPlaceMode(m) {
   placeMode = m;
   if (m === 'manualWall') modeBadge.textContent = 'Place Manual Walls';
@@ -756,11 +862,11 @@ function setPlaceMode(m) {
   else modeBadge.textContent = (mode==='edit' ? 'Editor' : 'Test');
 }
 
-/* small helpers for editor zoom */
-function editorZoomIn(){ editorHeight = Math.max(20, editorHeight - 8); camera.position.set(0, editorHeight, 0); camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z); }
-function editorZoomOut(){ editorHeight = Math.min(800, editorHeight + 8); camera.position.set(0, editorHeight, 0); camera.rotation.set(FIXED_CAMERA_ROTATION.x, FIXED_CAMERA_ROTATION.y, FIXED_CAMERA_ROTATION.z); }
+/* Editor zoom helpers (unchanged) */
+function editorZoomIn() { editorHeight = Math.max(20, editorHeight - 8); camera.position.set(0, editorHeight, 0); camera.lookAt(0,0,0); }
+function editorZoomOut() { editorHeight = Math.min(800, editorHeight + 8); camera.position.set(0, editorHeight, 0); camera.lookAt(0,0,0); }
 
-/* manual entities helper */
+/* Manual entities helper (unchanged) */
 function placeManualEntity(type, worldPos) {
   const h = parseFloat(wallHeightInput.value) || 2.0;
   const len = 6;
@@ -772,6 +878,13 @@ function placeManualEntity(type, worldPos) {
     mesh.position.copy(worldPos); mesh.position.y = 0.6; scene.add(mesh); manualEntities.push({mesh, type:'billboard', params:{height:1.2, length:0.2}});
   }
 }
+
+/* Resize handler */
+window.addEventListener('resize', ()=> {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
 </script>
 </body>
 </html>
