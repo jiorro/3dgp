@@ -390,13 +390,13 @@ function renderEditor() {
       addAutoWalls(curve, offset, wallH, 1.0);
     }
 
-    if (mode === 'edit') {
-      // ensure camera is detached from player and positioned top-down
-      try { if (player) player.remove(camera); } catch(e) {}
-      camera.up.set(0,1,0);
-      camera.position.set(0, editorHeight, 0);
-      camera.rotation.set(-0.15, 0, 0);
-    }
+if (mode === 'edit') {
+  try { if (player) player.remove(camera); } catch(e) {}
+  camera.up.set(0,1,0);
+  camera.position.set(0, editorHeight, 0);
+  camera.rotation.set(-0.15, 0, 0);
+}
+
   } catch (err) {
     console.error('renderEditor error', err);
   }
@@ -625,15 +625,21 @@ function enterTestMode() {
   speedHud.style.display = 'block';
   modeBadge.textContent = 'Test';
 }
-
 function enterEditMode() {
   mode = 'edit';
   btnTest.disabled = false; btnEdit.disabled = true;
-  if (player) { try { player.remove(camera); } catch(e) {} scene.remove(player); player = null; playerState = null; }
+
+  // stacca la camera dal player
+  try { if (player) player.remove(camera); } catch(e) {}
+  if (player) { scene.remove(player); player = null; playerState = null; }
   if (ai) { scene.remove(ai); ai = null; }
+
   for (let m of pointMeshes) m.visible = true;
+
   speedHud.style.display = 'none';
   modeBadge.textContent = 'Editor';
+
+  // vista dall’alto
   camera.up.set(0,1,0);
   camera.position.set(0, editorHeight, 0);
   camera.rotation.set(-0.15, 0, 0);
@@ -758,10 +764,21 @@ function updatePlayerPhysics(dt) {
     else if (input.right && !input.left) steerInput = -1;
   }
 
-  const maxSteer = THREE.MathUtils.degToRad(18);
-  const speedFactor = 0.5 - Math.min(1, Math.abs(playerState.velocity) / (maxSpeedMs));
-  const targetSteer = steerInput * maxSteer * (0.5 + 0.5 * speedFactor);
-  playerState.steerAngle = THREE.MathUtils.lerp(playerState.steerAngle || 0, targetSteer, dt*8);
+// angolo massimo di sterzata
+const maxSteer = THREE.MathUtils.degToRad(30);
+
+// fattore velocità: 1 a zero velocità, 0 a maxSpeedMs
+const speedFactor = 1 - Math.min(1, Math.abs(playerState.velocity) / maxSpeedMs);
+
+// curva di scaling: a basse velocità ~1.0, ad alte ~0.5
+const steerScale = 0.5 + 0.5 * speedFactor;
+
+// calcolo angolo target
+const targetSteer = steerInput * maxSteer * steerScale;
+
+// transizione morbida
+playerState.steerAngle = THREE.MathUtils.lerp(playerState.steerAngle || 0, targetSteer, dt * 5.0);
+
 
   const wheelbase = 2.6;
   const dHeading = (playerState.velocity / Math.max(0.0001, wheelbase)) * Math.tan(playerState.steerAngle || 0);
@@ -848,6 +865,26 @@ function animate(){
     requestAnimationFrame(animate);
     return;
   }
+  // collisioni con muri e paletti
+const playerBox = new THREE.Box3().setFromObject(player);
+
+for (let e of manualEntities) {
+  const box = new THREE.Box3().setFromObject(e.mesh);
+  if (playerBox.intersectsBox(box)) {
+    if (e.type === 'wall' || e.type === 'roadWall') {
+      // muro solido: ferma il veicolo
+      playerState.velocity = 0;
+      // sposta leggermente indietro per non rimanere incastrato
+      const backVec = new THREE.Vector3(Math.sin(playerState.heading),0,Math.cos(playerState.heading)).multiplyScalar(-0.5);
+      player.position.add(backVec);
+    }
+    if (e.type === 'billboard') {
+      // paletto: riduce la velocità a 3/4
+      playerState.velocity *= 0.75;
+    }
+  }
+}
+
 
   updatePlayerPhysics(dt);
   updateAIPhysics(dt);
